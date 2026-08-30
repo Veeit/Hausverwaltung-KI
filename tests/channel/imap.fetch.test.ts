@@ -8,6 +8,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // bereits zwei Datenschutz-relevante Fehler gefunden und behoben (das System
 // laeuft auf dem privaten Postfach des Nutzers).
 //
+// Task 10 Fix: fetchNewEmails() markiert Mails NICHT MEHR selbst als \Seen —
+// das passiert erst nach erfolgreicher Persistierung durch den Aufrufer, ueber
+// die separate Funktion markEmailsSeen(). Der Grund: wuerde \Seen schon beim
+// Abholen gesetzt (wie fruehe), ginge eine Mail bei jedem nachgelagerten
+// Speicherfehler stillschweigend verloren (gelesen markiert, nie gespeichert,
+// beim naechsten Poll nicht mehr geholt). fetchNewEmails() gibt daher pro Mail
+// { uid, mail } zurueck, damit der Aufrufer weiss, welche UID er quittieren
+// muss.
+//
 // Dieser Test mockt NUR die imapflow-Bibliothek (ImapFlow-Klasse); der echte
 // Code aus fetchNewEmails() UND der echte parseRawEmail()-Pfad (inkl.
 // mailparser) laufen durch. Es wird verifiziert:
@@ -16,11 +25,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 //  - Liefert der (gemockte) Server eine UID, deren heruntergeladene Mail NICHT
 //    tatsaechlich an den Alias geht (IMAP-TO/CC-SEARCH matcht laut RFC 3501 nur
 //    als Substring, der Server kann also "false positives" liefern), wird sie
-//    weder zurueckgegeben noch als \Seen markiert - zweite Datenschutz-Schicht.
-//  - Eine Mail, die tatsaechlich an den Alias geht, wird zurueckgegeben UND
-//    als \Seen markiert.
+//    weder zurueckgegeben noch je als \Seen markiert - zweite Datenschutz-Schicht.
+//  - Eine Mail, die tatsaechlich an den Alias geht, wird mitsamt ihrer UID
+//    zurueckgegeben. fetchNewEmails() selbst markiert dabei NIE etwas als
+//    \Seen (das ist jetzt Aufgabe von markEmailsSeen()).
 //  - Lock und Verbindung werden IMMER freigegeben (lock.release(), logout()),
 //    auch wenn beim Verarbeiten einer Mail ein Fehler auftritt.
+//  - markEmailsSeen() markiert genau die uebergebenen UIDs als \Seen und baut
+//    bei leerer Liste gar keine Verbindung auf.
 //
 // Keine echte Netzwerkverbindung wird aufgebaut.
 
@@ -71,7 +83,7 @@ const {
 
 vi.mock("imapflow", () => ({ ImapFlow: FakeImapFlow }));
 
-import { fetchNewEmails } from "@/channel/imap";
+import { fetchNewEmails, markEmailsSeen } from "@/channel/imap";
 
 const ALIAS = "hausverwaltung@example.com";
 
@@ -149,20 +161,22 @@ describe("fetchNewEmails (echte IMAP-Orchestrierung, imapflow gemockt)", () => {
     expect(messageFlagsAddMock).not.toHaveBeenCalled();
   });
 
-  it("liefert eine tatsächlich an den Alias adressierte Mail zurück UND markiert sie als \\Seen", async () => {
+  it("liefert eine tatsächlich an den Alias adressierte Mail zusammen mit ihrer UID zurück — OHNE sie als \\Seen zu markieren", async () => {
     searchMock.mockResolvedValue([1]);
     downloadMock.mockResolvedValue(downloadFor(matchingRaw));
 
     const result = await fetchNewEmails();
 
     expect(result).toHaveLength(1);
-    expect(result[0]?.subject).toBe("Türschloss klemmt");
-    expect(result[0]?.to).toEqual([ALIAS]);
-    expect(messageFlagsAddMock).toHaveBeenCalledTimes(1);
-    expect(messageFlagsAddMock).toHaveBeenCalledWith("1", ["\\Seen"], { uid: true });
+    expect(result[0]?.uid).toBe(1);
+    expect(result[0]?.mail.subject).toBe("Türschloss klemmt");
+    expect(result[0]?.mail.to).toEqual([ALIAS]);
+    // fetchNewEmails markiert selbst NIE etwas als \Seen — das ist jetzt
+    // Aufgabe des Aufrufers (erst nach erfolgreicher Persistierung).
+    expect(messageFlagsAddMock).not.toHaveBeenCalled();
   });
 
-  it("aus gemischten Treffern: nur die echte Alias-Mail kommt zurück, nur ihre UID wird \\Seen markiert", async () => {
+  it("aus gemischten Treffern: nur die echte Alias-Mail kommt mit ihrer UID zurück, die falsch-positive Mail wird verworfen", async () => {
     searchMock.mockResolvedValue([1, 2]);
     downloadMock.mockImplementation(async (uid: string) => {
       if (uid === "1") return downloadFor(matchingRaw);
@@ -173,10 +187,9 @@ describe("fetchNewEmails (echte IMAP-Orchestrierung, imapflow gemockt)", () => {
     const result = await fetchNewEmails();
 
     expect(result).toHaveLength(1);
-    expect(result[0]?.subject).toBe("Türschloss klemmt");
-    expect(messageFlagsAddMock).toHaveBeenCalledTimes(1);
-    expect(messageFlagsAddMock).toHaveBeenCalledWith("1", ["\\Seen"], { uid: true });
-    expect(messageFlagsAddMock).not.toHaveBeenCalledWith("2", expect.anything(), expect.anything());
+    expect(result[0]?.uid).toBe(1);
+    expect(result[0]?.mail.subject).toBe("Türschloss klemmt");
+    expect(messageFlagsAddMock).not.toHaveBeenCalled();
   });
 
   it("gibt Lock und Verbindung im Erfolgsfall frei (lock.release() und client.logout())", async () => {
@@ -201,5 +214,40 @@ describe("fetchNewEmails (echte IMAP-Orchestrierung, imapflow gemockt)", () => {
 
     expect(lockReleaseMock).toHaveBeenCalledTimes(1);
     expect(logoutMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("markEmailsSeen (quittiert Mails erst NACH erfolgreicher Persistierung durch den Aufrufer)", () => {
+  beforeEach(() => {
+    process.env.ANTHROPIC_API_KEY = "test";
+    process.env.MAIL_USER = "login@example.com";
+    process.env.MAIL_PASSWORD = "app-passwort";
+    process.env.MAIL_ALIAS = ALIAS;
+    process.env.DASHBOARD_PASSWORD = "test";
+
+    constructorMock.mockClear();
+    connectMock.mockClear();
+    lockReleaseMock.mockClear();
+    getMailboxLockMock.mockClear();
+    messageFlagsAddMock.mockClear();
+    logoutMock.mockClear();
+  });
+
+  it("markiert die übergebenen UIDs als \\Seen und gibt Lock/Verbindung frei", async () => {
+    await markEmailsSeen([1, 2, 3]);
+
+    expect(connectMock).toHaveBeenCalledTimes(1);
+    expect(messageFlagsAddMock).toHaveBeenCalledTimes(1);
+    expect(messageFlagsAddMock).toHaveBeenCalledWith([1, 2, 3], ["\\Seen"], { uid: true });
+    expect(lockReleaseMock).toHaveBeenCalledTimes(1);
+    expect(logoutMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("baut bei leerer UID-Liste gar keine Verbindung auf", async () => {
+    await markEmailsSeen([]);
+
+    expect(constructorMock).not.toHaveBeenCalled();
+    expect(connectMock).not.toHaveBeenCalled();
+    expect(messageFlagsAddMock).not.toHaveBeenCalled();
   });
 });

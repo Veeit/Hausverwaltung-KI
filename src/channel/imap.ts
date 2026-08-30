@@ -3,12 +3,22 @@ import { getEnv } from "@/env";
 import { parseRawEmail } from "@/channel/parse";
 import type { IncomingEmail } from "@/channel/types";
 
+/**
+ * Eine heruntergeladene, geparste Mail zusammen mit ihrer IMAP-UID.
+ * Die UID wird gebraucht, damit der Aufrufer (pollOnce) die Mail erst NACH
+ * erfolgreicher Persistierung als \Seen quittieren kann (siehe markEmailsSeen).
+ */
+export interface FetchedEmail {
+  uid: number;
+  mail: IncomingEmail;
+}
+
 export function filterToAlias(mails: IncomingEmail[], alias: string): IncomingEmail[] {
   const target = alias.toLowerCase();
   return mails.filter((mail) => mail.to.some((address) => address.toLowerCase() === target));
 }
 
-export async function fetchNewEmails(): Promise<IncomingEmail[]> {
+async function openConnection(): Promise<ImapFlow> {
   const env = getEnv();
   const client = new ImapFlow({
     host: env.IMAP_HOST,
@@ -18,21 +28,39 @@ export async function fetchNewEmails(): Promise<IncomingEmail[]> {
     logger: false,
   });
   await client.connect();
+  return client;
+}
 
-  const parsed: IncomingEmail[] = [];
+/**
+ * Holt neue Mails vom IMAP-Postfach, OHNE sie als gelesen zu markieren.
+ *
+ * Das Markieren als \Seen ist bewusst NICHT Teil dieser Funktion: eine Mail
+ * darf erst dann im Postfach als erledigt gelten, wenn sie beim Aufrufer
+ * tatsächlich erfolgreich gespeichert wurde. Würde hier schon markiert,
+ * bevor pollOnce die Mail in die Datenbank geschrieben hat, ginge eine Mail
+ * bei jedem Speicherfehler (z. B. ein kaputter Anhang) stillschweigend
+ * verloren: gelesen markiert, nie gespeichert, beim nächsten Poll nicht mehr
+ * geholt. Der Aufrufer muss stattdessen nach erfolgreicher Verarbeitung
+ * explizit markEmailsSeen() mit den UIDs der erfolgreich verarbeiteten
+ * Mails aufrufen.
+ */
+export async function fetchNewEmails(): Promise<FetchedEmail[]> {
+  const env = getEnv();
+  const client = await openConnection();
+
+  const fetched: FetchedEmail[] = [];
   const lock = await client.getMailboxLock("INBOX");
   try {
     // Die Alias-Einschränkung muss bereits Teil der IMAP-Suche sein, nicht erst
     // des nachgelagerten Filters: sonst würde die private Post des Nutzers
-    // (dieser Account ist sein Fastmail-Postfach) mitheruntergeladen und
-    // durch messageFlagsAdd unwiderruflich als \Seen markiert. Die serverseitige
-    // TO/CC-SEARCH matcht laut RFC 3501 aber nur als Substring, nicht exakt
-    // (z. B. Plus-Adressierung, Domain-Treffer, Zufallstreffer im Display-Namen)
-    // — der Server kann also UIDs liefern, die den Alias nur scheinbar treffen.
-    // Deshalb wird jede heruntergeladene Mail einzeln mit filterToAlias geprüft
-    // und nur bei echtem Treffer als \Seen markiert; Substring-Kollisionen werden
-    // verworfen und bleiben ungelesen, damit sie beim nächsten Poll erneut
-    // geladen und ggf. korrekt zugeordnet werden können.
+    // (dieser Account ist sein Fastmail-Postfach) mitheruntergeladen. Die
+    // serverseitige TO/CC-SEARCH matcht laut RFC 3501 aber nur als Substring,
+    // nicht exakt (z. B. Plus-Adressierung, Domain-Treffer, Zufallstreffer im
+    // Display-Namen) — der Server kann also UIDs liefern, die den Alias nur
+    // scheinbar treffen. Deshalb wird jede heruntergeladene Mail einzeln mit
+    // filterToAlias geprüft; Substring-Kollisionen werden verworfen und
+    // tauchen im Rückgabewert gar nicht erst auf — sie dürfen also auch
+    // später nie als \Seen markiert werden.
     const alias = env.MAIL_ALIAS;
     const uids =
       (await client.search(
@@ -47,8 +75,7 @@ export async function fetchNewEmails(): Promise<IncomingEmail[]> {
       }
       const mail = await parseRawEmail(Buffer.concat(chunks));
       if (filterToAlias([mail], alias).length > 0) {
-        parsed.push(mail);
-        await client.messageFlagsAdd(String(uid), ["\\Seen"], { uid: true });
+        fetched.push({ uid, mail });
       }
     }
   } finally {
@@ -56,5 +83,24 @@ export async function fetchNewEmails(): Promise<IncomingEmail[]> {
     await client.logout();
   }
 
-  return parsed;
+  return fetched;
+}
+
+/**
+ * Markiert die übergebenen UIDs im IMAP-Postfach als \Seen. Wird vom
+ * Aufrufer erst NACH erfolgreicher Persistierung der jeweiligen Mail
+ * aufgerufen (siehe fetchNewEmails). Bei leerer Liste wird gar keine
+ * Verbindung aufgebaut.
+ */
+export async function markEmailsSeen(uids: number[]): Promise<void> {
+  if (uids.length === 0) return;
+
+  const client = await openConnection();
+  const lock = await client.getMailboxLock("INBOX");
+  try {
+    await client.messageFlagsAdd(uids, ["\\Seen"], { uid: true });
+  } finally {
+    lock.release();
+    await client.logout();
+  }
 }

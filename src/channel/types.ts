@@ -26,10 +26,16 @@ export interface OutgoingEmail {
  * schmalen Interface, damit später WhatsApp oder SMS andocken können, ohne
  * die Agent-Logik anzufassen.
  *
- * `fetchNewEmails` (Task 6) und `sendSmtp` (Step 7 dieses Tasks) erfüllen es
- * strukturell — die E-Mail-Implementierung ist also bereits ein `Channel`:
- *
- *   const emailChannel: Channel = { fetch: fetchNewEmails, send: sendSmtp };
+ * Seit dem Task-10-Fix gegen stillen Mail-Verlust liefert `fetchNewEmails`
+ * (Task 6) nicht mehr `IncomingEmail[]` direkt, sondern
+ * `FetchedEmail[]` (`{ uid, mail }`) — das Markieren als gelesen (`\Seen`)
+ * passiert erst NACH erfolgreicher Persistierung durch den Aufrufer, über
+ * die separate Funktion `markEmailsSeen`. `fetchNewEmails` erfüllt `Channel`
+ * also nicht mehr strukturell 1:1; ein Adapter wäre nötig
+ * (`fetch: async () => (await fetchNewEmails()).map((f) => f.mail)`), wenn
+ * die E-Mail-Implementierung tatsächlich hinter diesem Interface laufen
+ * soll. `sendSmtp` (Step 7 dieses Tasks) erfüllt weiterhin `Channel["send"]`
+ * unverändert.
  *
  * Ein zweiter Kanal implementiert dasselbe Interface und wird an denselben
  * Stellen injiziert, an denen `pollOnce` und `sendAndLogEmail` heute ihre

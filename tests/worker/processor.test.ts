@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -241,6 +241,42 @@ describe("ingestEmail", () => {
     expect(row.filePath).toBe(path.join(messageDir, ".._.._evil.sh"));
     expect(fs.existsSync(row.filePath)).toBe(true);
   });
+
+  // Bekannter Auslöser des Important-Befunds: ein Anhang mit sehr langem
+  // Dateinamen löste in fs.writeFileSync ein unbehandeltes ENAMETOOLONG aus,
+  // das aus ingestEmail herauspropagierte und (vor dem Fix) die komplette
+  // pollOnce-Schleife abbrach. sanitizeFilename kürzt jetzt auf eine sichere
+  // Länge — die Endung bleibt dabei erhalten, damit die Datei später noch
+  // zugeordnet werden kann.
+  it("kürzt einen sehr langen Dateinamen (500 Zeichen) auf eine sichere Länge, behält aber die Endung", async () => {
+    seedTenant();
+    const longName = "a".repeat(500) + ".pdf";
+    const content = Buffer.from("harmloser pdf-inhalt");
+    const id = await ingestEmail(
+      makeMail({
+        messageId: "<msg-longname@example.com>",
+        attachments: [{ filename: longName, mimeType: "application/pdf", content }],
+      }),
+    );
+    expect(id).not.toBeNull();
+
+    const row = db
+      .select()
+      .from(attachments)
+      .where(eq(attachments.messageId, id!))
+      .get()!;
+    const messageDir = path.resolve(attachmentsDir, String(id));
+
+    // Datei liegt innerhalb von ATTACHMENTS_DIR und wurde erfolgreich geschrieben.
+    expect(row.filePath.startsWith(messageDir + path.sep)).toBe(true);
+    expect(fs.existsSync(row.filePath)).toBe(true);
+    expect(fs.readFileSync(row.filePath, "utf8")).toBe("harmloser pdf-inhalt");
+
+    // Die Endung bleibt erhalten, der Dateiname selbst ist sicher kurz.
+    const writtenName = path.basename(row.filePath);
+    expect(writtenName.endsWith(".pdf")).toBe(true);
+    expect(writtenName.length).toBeLessThanOrEqual(200);
+  });
 });
 
 describe("processPendingMessages", () => {
@@ -326,26 +362,115 @@ describe("pollOnce", () => {
     expect(fake.calls()).toBe(0);
   });
 
-  it("normaler Durchlauf: fetch → ingest → Verarbeitung", async () => {
+  it("normaler Durchlauf: fetch → ingest → Verarbeitung, UID wird nach Erfolg quittiert", async () => {
     seedTenant();
     let fetchCalls = 0;
+    const seenUids: number[] = [];
     const fake = makeAgentFake();
 
     await pollOnce({
       fetch: async () => {
         fetchCalls++;
-        return [makeMail()];
+        return [{ uid: 42, mail: makeMail() }];
+      },
+      markSeen: async (uids) => {
+        seenUids.push(...uids);
       },
       agent: fake.deps,
     });
 
     expect(fetchCalls).toBe(1);
     expect(fake.calls()).toBe(1);
+    expect(seenUids).toEqual([42]);
     const msg = db
       .select()
       .from(messages)
       .where(eq(messages.imapMessageId, "<msg-1@example.com>"))
       .get()!;
     expect(msg.processingStatus).toBe("done");
+  });
+
+  // Regressionstest für den Important-Befund: fetchNewEmails() markierte Mails
+  // frueher schon beim Abholen als \Seen, BEVOR sie in der DB standen. Schlug
+  // das Speichern danach fehl (z.B. durch einen kaputten Anhang), war die Mail
+  // im Postfach gelesen markiert, wurde beim naechsten Poll nicht mehr geholt
+  // und existierte nirgends — der schlimmste denkbare Fehler fuer eine
+  // Mieter-Reparaturmeldung. Der Fix: \Seen wird erst NACH erfolgreicher
+  // Persistierung gesetzt (markEmailsSeen, separat von fetchNewEmails), UND
+  // pollOnce faengt Fehler PRO MAIL ab, damit eine kaputte Mail nicht die
+  // gesamte for-Schleife abbricht und dabei die nachfolgenden, noch nicht
+  // verarbeiteten Mails des Batches mit sich reisst.
+  //
+  // Die kaputte Mail hier hat `text: undefined` statt eines Strings — ein
+  // realistischer Fall fuer eine unvollstaendig geparste/korrupte Mail (z.B.
+  // ein zukuenftiger zweiter Kanal mit lockerer Validierung), der die
+  // NOT-NULL-Spalte `messages.body` verletzt: der INSERT selbst schlaegt mit
+  // einem echten, unbehandelten SqliteError fehl, BEVOR irgendeine Zeile
+  // committet wird — die Mail landet also nachweislich nirgends in der DB.
+  // (Ein kaputter Anhang wuerde denselben pollOnce-Fix ebenso durchlaufen,
+  // haette aber bereits eine — unvollstaendige — message-Zeile erzeugt, da
+  // ingestEmail die Message vor den Anhaengen persistiert; das wuerde hier
+  // nur den Test verkomplizieren, ohne die eigentliche Regression staerker
+  // zu belegen.)
+  //
+  // Die kaputte Mail wird ABSICHTLICH VOR der guten Mail im Batch platziert,
+  // um zu beweisen, dass ein frueher Fehler die spaeteren Mails nicht mehr
+  // mitreisst (das war exakt die alte Schleifenabbruch-Regression).
+  it("Speicherfehler bei einer Mail: sie bleibt ungelesen, die übrigen Mails des Batches werden trotzdem verarbeitet und quittiert", async () => {
+    seedTenant();
+    const brokenMail = makeMail({
+      messageId: "<msg-broken@example.com>",
+      text: undefined as unknown as string,
+    });
+    const goodMail = makeMail({ messageId: "<msg-ok@example.com>" });
+    const seenUids: number[] = [];
+    const fake = makeAgentFake();
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await pollOnce({
+      fetch: async () => [
+        { uid: 11, mail: brokenMail },
+        { uid: 10, mail: goodMail },
+      ],
+      markSeen: async (uids) => {
+        seenUids.push(...uids);
+      },
+      agent: fake.deps,
+    });
+
+    // Nur die erfolgreich gespeicherte Mail wird quittiert; die kaputte Mail
+    // bleibt ungelesen und wird beim naechsten Poll erneut versucht.
+    expect(seenUids).toEqual([10]);
+    expect(seenUids).not.toContain(11);
+
+    // Die kaputte Mail existiert nirgends in der DB (kein halb gespeicherter
+    // Zustand) — der INSERT ist an der NOT-NULL-Constraint gescheitert, bevor
+    // irgendetwas committet wurde.
+    const brokenMsg = db
+      .select()
+      .from(messages)
+      .where(eq(messages.imapMessageId, "<msg-broken@example.com>"))
+      .get();
+    expect(brokenMsg).toBeUndefined();
+
+    // Die gute Mail — obwohl NACH der kaputten im Batch — wurde trotzdem
+    // persistiert und verarbeitet (kein Schleifenabbruch mehr).
+    const okMsg = db
+      .select()
+      .from(messages)
+      .where(eq(messages.imapMessageId, "<msg-ok@example.com>"))
+      .get();
+    expect(okMsg).toBeTruthy();
+    expect(okMsg!.processingStatus).toBe("done");
+    expect(fake.calls()).toBe(1);
+
+    // Der Fehler wurde geloggt, mit UID und Absender, damit man die Mail im
+    // Postfach wiederfindet.
+    expect(consoleErrorSpy).toHaveBeenCalled();
+    const loggedText = consoleErrorSpy.mock.calls.map((call) => call.join(" ")).join(" ");
+    expect(loggedText).toContain("11");
+    expect(loggedText).toContain("max.mustermann@example.com");
+
+    consoleErrorSpy.mockRestore();
   });
 });
