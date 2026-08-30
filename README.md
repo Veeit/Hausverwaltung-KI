@@ -220,3 +220,13 @@ npm run build    # Produktions-Build des Dashboards
 - Kill-Switch: Überschreitet der Mail-Ausgang `MAIL_RATE_LIMIT_PER_HOUR`,
   pausiert der Worker; im Dashboard erscheint ein roter Banner mit
   „Fortsetzen"-Button.
+- Verworfene Betreff-Tags (jemand nennt eine fremde oder nicht mehr gültige
+  Vorgangsnummer `[HV-n]`) landen nur im Server-Log
+  (`src/lib/ticketAccess.ts`); das Dashboard zeigt sie nirgends an. Ein
+  Vermieter bemerkt wiederholtes Raten fremder Vorgangsnummern also nur bei
+  Log-Einsicht, nicht im Dashboard selbst.
+- Ein bereits beauftragter Handwerker lässt sich nicht gezielt „abbestellen":
+  Das System kennt nur den Weg über einen neuen Genehmigungsantrag für einen
+  anderen Handwerker (der den alten dann als aktuell Beauftragten ablöst).
+  Es gibt keine Aktion, die einen beauftragten Handwerker ausdrücklich vom
+  Vorgang abzieht, ohne gleichzeitig einen neuen zu beauftragen.
