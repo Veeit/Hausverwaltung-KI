@@ -64,8 +64,7 @@ Mieter ──E-Mail──▶ Fastmail (Alias hausverwaltung@…)
    unter „Senden & Empfangen").
 2. **Neuen Alias erstellen**, z. B. `hausverwaltung@deine-domain.de` oder
    `hausverwaltung.deinname@fastmail.com`.
-3. Zustellung in die normale Inbox belassen — der Worker filtert selbst auf
-   die Alias-Adresse (To/Cc).
+3. Zustellung festlegen — zwei gleichwertige Wege, siehe unten.
 4. Die Alias-Adresse ist `MAIL_ALIAS` für die `.env`; sie ist gleichzeitig
    Eingangsfilter und Absenderadresse aller System-Mails.
 
@@ -76,9 +75,34 @@ nicht erst heruntergeladen wird. Zweitens wird jede heruntergeladene Mail vor
 der Verarbeitung noch einmal exakt gegen die Alias-Adresse geprüft — auch ein
 zufälliger Teilstring-Treffer der (laut RFC 3501 nicht exakten) IMAP-Suche
 fällt dabei heraus. Nur Mails, die diese Prüfung bestehen, werden überhaupt
-als gelesen markiert; alles andere bleibt unangetastet und ungelesen. Du
-kannst dein normales Fastmail-Hauptpostfach also gefahrlos anbinden — deine
-private Post wird weder verarbeitet noch als gelesen markiert.
+als gelesen markiert; alles andere bleibt unangetastet und ungelesen.
+
+#### Wohin soll der Alias zustellen?
+
+**Option A — normale Inbox (Standard, keine Konfiguration nötig).** Der
+Worker durchsucht per Default `INBOX` und filtert dort selbst auf die
+Alias-Adresse (To/Cc, siehe oben). Du kannst dein normales
+Fastmail-Hauptpostfach also gefahrlos anbinden — deine private Post wird
+weder verarbeitet noch als gelesen markiert.
+
+**Option B — eigener Ordner per Fastmail-Regel (empfohlen).** Lege in
+**Einstellungen → Regeln** eine Regel an, die Mails an den Alias in einen
+eigenen Ordner verschiebt (z. B. `Hausverwaltung TOOL FOM`), statt sie in der
+Inbox zu belassen. Vorteil: Der Worker bekommt die private Inbox dann
+überhaupt nicht mehr zu Gesicht — er öffnet ausschließlich den konfigurierten
+Ordner. In diesem Fall muss `IMAP_MAILBOX` in der `.env` auf **genau** diesen
+Ordnernamen gesetzt werden (siehe Konfigurationstabelle unten). Bleibt
+`IMAP_MAILBOX` auf dem Default `INBOX` stehen, während die Regel längst in
+einen anderen Ordner zustellt, findet der Worker dort schlicht nichts — die
+Poll-Läufe laufen scheinbar fehlerfrei, aber leer.
+
+**Achtung, Falle beim Testen:** Der Worker verarbeitet ausschließlich
+**ungelesene** Mails. Öffnest du eine Test-Mail zur Kontrolle in einem
+Mail-Client (Fastmail-Webmail, Handy-App, …), markiert das sie automatisch
+als gelesen — der Worker übergeht sie dann beim nächsten Poll, obwohl sie
+weiterhin im richtigen Ordner liegt. Abhilfe: die Mail im Mail-Client wieder
+explizit als ungelesen markieren (meist über das Kontextmenü oder ein
+Umschlag-Symbol) und den nächsten Poll-Durchlauf (~30 s) abwarten.
 
 ## Konfiguration (`.env`)
 
@@ -96,6 +120,7 @@ Dann die Werte eintragen:
 | `MAIL_ALIAS` | Dedizierter Alias: Eingangsfilter + Absenderadresse — **vollständige Adresse, nicht nur der Namensteil vor dem @!** | `hausverwaltung-tool@ihre-domain.de` |
 | `DASHBOARD_PASSWORD` | Passwort für das Dashboard-Login | — |
 | `IMAP_HOST` / `IMAP_PORT` | IMAP-Server | `imap.fastmail.com` / `993` |
+| `IMAP_MAILBOX` | Postfach-Ordner, der auf Alias-Mails durchsucht wird — bei Zustellung per Fastmail-Regel in einen eigenen Ordner (Option B oben) auf dessen exakten Namen setzen | `INBOX` |
 | `SMTP_HOST` / `SMTP_PORT` | SMTP-Server | `smtp.fastmail.com` / `465` |
 | `MAIL_RATE_LIMIT_PER_HOUR` | Kill-Switch: max. ausgehende Mails pro Stunde | `20` |
 | `DATABASE_PATH` | Pfad zur SQLite-Datei | `./data/hausverwaltung.db` |
