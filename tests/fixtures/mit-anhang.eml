@@ -1,0 +1,23 @@
+Message-ID: <test-anhang-002@example.com>
+Date: Sat, 29 Aug 2026 11:30:00 +0200
+From: erika.beispiel@example.com
+To: hausverwaltung@example.com
+Cc: Zweiter Empfaenger <Zweite.Adresse@example.com>
+Subject: Foto vom Wasserschaden
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="grenze-123"
+
+--grenze-123
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+Hallo, anbei die Notiz zum Wasserschaden im Bad.
+
+--grenze-123
+Content-Type: text/plain; charset=utf-8; name="notiz.txt"
+Content-Disposition: attachment; filename="notiz.txt"
+Content-Transfer-Encoding: base64
+
+V2Fzc2Vyc2NoYWRlbiBpbSBCYWQ=
+
+--grenze-123--
