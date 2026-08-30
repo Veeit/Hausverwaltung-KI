@@ -101,6 +101,39 @@ describe("createTenant", () => {
     ).rejects.toThrow("gültige E-Mail");
     expect(db.select().from(tenants).all()).toHaveLength(0);
   });
+
+  it("wirft bei bereits vergebener E-Mail eine deutsche Fehlermeldung statt eines rohen SQLite-Fehlers", async () => {
+    const propertyId = seedProperty();
+    db.insert(tenants)
+      .values({ name: "Erika Mustermann", email: "erika@example.com", propertyId })
+      .run();
+
+    await expect(
+      createTenant(
+        fd({
+          name: "Zweiter Max",
+          email: "Erika@Example.com",
+          propertyId: String(propertyId),
+        }),
+      ),
+    ).rejects.toThrow("bereits einem anderen Mieter zugeordnet");
+    expect(db.select().from(tenants).all()).toHaveLength(1);
+  });
+
+  it("wirft bei nicht existierender propertyId eine deutsche Fehlermeldung statt eines rohen SQLite-Fehlers", async () => {
+    const missingPropertyId = 999999;
+
+    await expect(
+      createTenant(
+        fd({
+          name: "Max Mustermann",
+          email: "max@example.com",
+          propertyId: String(missingPropertyId),
+        }),
+      ),
+    ).rejects.toThrow("Objekt existiert nicht mehr");
+    expect(db.select().from(tenants).all()).toHaveLength(0);
+  });
 });
 
 describe("updateTenant", () => {
@@ -125,6 +158,28 @@ describe("updateTenant", () => {
     const row = db.select().from(tenants).where(eq(tenants.id, id)).get();
     expect(row?.name).toBe("Maximilian Mustermann");
     expect(row?.email).toBe("neu@example.com");
+  });
+
+  it("wirft beim Ändern auf eine bereits vergebene E-Mail dieselbe deutsche Fehlermeldung", async () => {
+    const propertyId = seedProperty();
+    db.insert(tenants)
+      .values({ name: "Erika Mustermann", email: "erika@example.com", propertyId })
+      .run();
+    const id = Number(
+      db
+        .insert(tenants)
+        .values({ name: "Max", email: "max@example.com", propertyId })
+        .run().lastInsertRowid,
+    );
+
+    await expect(
+      updateTenant(
+        id,
+        fd({ name: "Max", email: "Erika@Example.com", propertyId: String(propertyId) }),
+      ),
+    ).rejects.toThrow("bereits einem anderen Mieter zugeordnet");
+    const row = db.select().from(tenants).where(eq(tenants.id, id)).get();
+    expect(row?.email).toBe("max@example.com");
   });
 });
 
@@ -256,5 +311,56 @@ describe("Handwerker", () => {
     await deleteContractor(id);
 
     expect(db.select().from(contractors).all()).toHaveLength(0);
+  });
+
+  it("createContractor wirft bei bereits vergebener E-Mail eine deutsche Fehlermeldung statt eines rohen SQLite-Fehlers", async () => {
+    db.insert(contractors)
+      .values({ name: "Klaus Rohr", email: "klaus.rohr@example.com", trade: "Sanitär" })
+      .run();
+
+    await expect(
+      createContractor(
+        fd({ name: "Anderer Klaus", email: "Klaus.Rohr@Example.com", trade: "Elektrik" }),
+      ),
+    ).rejects.toThrow("bereits einem anderen Handwerker zugeordnet");
+    expect(db.select().from(contractors).all()).toHaveLength(1);
+  });
+
+  it("deleteContractor wirft bei FK-Konflikt (Handwerker hat Ticket) eine deutsche Fehlermeldung", async () => {
+    const propertyId = seedProperty();
+    const tenantId = Number(
+      db
+        .insert(tenants)
+        .values({ name: "Max", email: "max@example.com", propertyId })
+        .run().lastInsertRowid,
+    );
+    const contractorId = Number(
+      db
+        .insert(contractors)
+        .values({ name: "Klaus Rohr", email: "klaus.rohr@example.com", trade: "Sanitär" })
+        .run().lastInsertRowid,
+    );
+    const conversationId = Number(
+      db
+        .insert(conversations)
+        .values({
+          counterpartType: "tenant",
+          counterpartId: tenantId,
+          counterpartEmail: "max@example.com",
+        })
+        .run().lastInsertRowid,
+    );
+    db.insert(tickets)
+      .values({
+        tenantId,
+        conversationId,
+        contractorId,
+        type: "reparatur",
+        title: "Heizung defekt",
+      })
+      .run();
+
+    await expect(deleteContractor(contractorId)).rejects.toThrow("kann nicht gelöscht werden");
+    expect(db.select().from(contractors).all()).toHaveLength(1);
   });
 });

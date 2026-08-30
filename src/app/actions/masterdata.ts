@@ -58,6 +58,30 @@ function deleteOrThrow(run: () => void, conflictMessage: string): void {
   }
 }
 
+// Analog zu deleteOrThrow, aber für Anlegen/Ändern: Dort kann statt eines
+// FOREIGN-KEY-Konflikts (referenziertes Objekt existiert nicht (mehr), z. B.
+// propertyId eines gelöschten Objekts) auch ein UNIQUE-Konflikt auftreten
+// (bereits vergebene E-Mail-Adresse bei tenants/contractors). Beides wird in
+// eine verständliche deutsche Meldung übersetzt; alle anderen Fehler werden
+// unverändert weitergeworfen, damit unbekannte Fehler nicht verschluckt werden.
+function writeOrThrow(
+  run: () => void,
+  messages: { emailTaken: string; referenceMissing?: string },
+): void {
+  try {
+    run();
+  } catch (err) {
+    const text = String(err);
+    if (text.includes("UNIQUE constraint failed")) {
+      throw new Error(messages.emailTaken);
+    }
+    if (messages.referenceMissing && text.includes("FOREIGN KEY constraint failed")) {
+      throw new Error(messages.referenceMissing);
+    }
+    throw err;
+  }
+}
+
 // --- Objekte ---
 
 export async function createProperty(formData: FormData): Promise<void> {
@@ -106,15 +130,26 @@ function tenantValues(formData: FormData) {
   };
 }
 
+const TENANT_EMAIL_TAKEN =
+  "Diese E-Mail-Adresse ist bereits einem anderen Mieter zugeordnet. Bitte eine andere E-Mail-Adresse verwenden oder den bestehenden Mieter bearbeiten.";
+const TENANT_PROPERTY_MISSING =
+  "Das ausgewählte Objekt existiert nicht mehr. Bitte die Seite neu laden und ein gültiges Objekt auswählen.";
+
 export async function createTenant(formData: FormData): Promise<void> {
   await requireAuth();
-  getDb().insert(tenants).values(tenantValues(formData)).run();
+  writeOrThrow(() => getDb().insert(tenants).values(tenantValues(formData)).run(), {
+    emailTaken: TENANT_EMAIL_TAKEN,
+    referenceMissing: TENANT_PROPERTY_MISSING,
+  });
   revalidatePath("/stammdaten/mieter");
 }
 
 export async function updateTenant(id: number, formData: FormData): Promise<void> {
   await requireAuth();
-  getDb().update(tenants).set(tenantValues(formData)).where(eq(tenants.id, id)).run();
+  writeOrThrow(
+    () => getDb().update(tenants).set(tenantValues(formData)).where(eq(tenants.id, id)).run(),
+    { emailTaken: TENANT_EMAIL_TAKEN, referenceMissing: TENANT_PROPERTY_MISSING },
+  );
   revalidatePath("/stammdaten/mieter");
 }
 
@@ -144,19 +179,28 @@ function contractorValues(formData: FormData) {
   };
 }
 
+const CONTRACTOR_EMAIL_TAKEN =
+  "Diese E-Mail-Adresse ist bereits einem anderen Handwerker zugeordnet. Bitte eine andere E-Mail-Adresse verwenden oder den bestehenden Handwerker bearbeiten.";
+
 export async function createContractor(formData: FormData): Promise<void> {
   await requireAuth();
-  getDb().insert(contractors).values(contractorValues(formData)).run();
+  writeOrThrow(() => getDb().insert(contractors).values(contractorValues(formData)).run(), {
+    emailTaken: CONTRACTOR_EMAIL_TAKEN,
+  });
   revalidatePath("/stammdaten/handwerker");
 }
 
 export async function updateContractor(id: number, formData: FormData): Promise<void> {
   await requireAuth();
-  getDb()
-    .update(contractors)
-    .set(contractorValues(formData))
-    .where(eq(contractors.id, id))
-    .run();
+  writeOrThrow(
+    () =>
+      getDb()
+        .update(contractors)
+        .set(contractorValues(formData))
+        .where(eq(contractors.id, id))
+        .run(),
+    { emailTaken: CONTRACTOR_EMAIL_TAKEN },
+  );
   revalidatePath("/stammdaten/handwerker");
 }
 
