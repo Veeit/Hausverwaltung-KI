@@ -1,4 +1,4 @@
-const STATUS_STYLES: Record<string, { label: string; className: string }> = {
+export const STATUS_STYLES: Record<string, { label: string; className: string }> = {
   neu: { label: "Neu", className: "bg-blue-100 text-blue-800" },
   infosammlung: { label: "Infosammlung", className: "bg-cyan-100 text-cyan-800" },
   wartet_auf_genehmigung: {
