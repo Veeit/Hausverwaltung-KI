@@ -72,6 +72,44 @@ describe("uploadDocument", () => {
     );
     expect(db.select().from(documents).all()).toHaveLength(0);
   });
+
+  it("akzeptiert eine Markdown-Datei (.md)", async () => {
+    const text = "# Hausordnung\n\nRuhezeiten gelten werktags ab 22 Uhr.";
+    const file = new File([Buffer.from(text, "utf8")], "hausordnung.md", {
+      type: "text/markdown",
+    });
+    const formData = new FormData();
+    formData.set("file", file);
+
+    await uploadDocument(formData);
+
+    const row = db.select().from(documents).all()[0];
+    expect(row).toBeDefined();
+    expect(row.filename).toBe("hausordnung.md");
+    expect(row.mimeType).toBe("text/markdown");
+    expect(row.content).toContain("Ruhezeiten");
+  });
+
+  // Haertungsluecke aus dem Review: Ein versehentlich hochgeladenes Bild landete
+  // vor diesem Fix per data.toString("utf8") als Binaermuell im FTS5-Index, den
+  // der KI-Agent als Faktenquelle durchsucht (Nachweis: Suche nach "JFIF" fand
+  // einen Treffer). uploadDocument muss solche Dateitypen ablehnen, BEVOR sie
+  // addDocument()/dem Index erreichen.
+  it("lehnt einen nicht unterstützten Dateityp (PNG) ab und indiziert nichts", async () => {
+    const pngBytes = Buffer.from([
+      0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01,
+    ]); // JFIF-Signatur
+    const file = new File([pngBytes], "urlaubsfoto.png", { type: "image/png" });
+    const formData = new FormData();
+    formData.set("file", file);
+
+    await expect(uploadDocument(formData)).rejects.toThrow(
+      /PDF.*TXT.*Markdown|Nicht unterstützter Dateityp/,
+    );
+
+    expect(db.select().from(documents).all()).toHaveLength(0);
+    expect(searchDocuments("JFIF")).toEqual([]);
+  });
 });
 
 describe("removeDocument", () => {
