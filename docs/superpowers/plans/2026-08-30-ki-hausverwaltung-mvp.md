@@ -3118,9 +3118,9 @@ Dünner IMAP-Abruf ungelesener Mails via imapflow. Die Verbindung selbst wird NI
 
 - [ ] **Step 3: `src/channel/imap.ts` implementieren**
 
-  Ablauf: connect → `getMailboxLock("INBOX")` → Suche **eingeschränkt auf den Alias** (`{ seen: false, or: [{ to: alias }, { cc: alias }] }`) → je UID Quelle herunterladen und parsen → `\Seen` setzen → Lock-Release + Logout im `finally` → `filterToAlias` als zweites Netz.
+  Ablauf: connect → `getMailboxLock("INBOX")` → Suche **eingeschränkt auf den Alias** (`{ seen: false, or: [{ to: alias }, { cc: alias }] }`) → je UID herunterladen und parsen → **pro Mail** mit `filterToAlias([mail], alias)` prüfen → nur bei Treffer sammeln **und** `\Seen` setzen → Lock-Release + Logout im `finally`.
 
-  **Die Einschränkung muss in der Suchanfrage liegen, nicht erst im Filter.** Das System läuft auf dem privaten Postfach des Nutzers. Würde man alle ungelesenen Mails holen und erst danach filtern, würde beim ersten Lauf die komplette ungelesene Privatpost heruntergeladen und als gelesen markiert — ein nicht rückgängig zu machender Eingriff in fremde Daten. Die clientseitige Filterung bleibt zusätzlich bestehen, weil IMAP-Server Header-Substrings großzügiger matchen können.
+  **Die Privatpost wird zweifach geschützt, und beide Schichten sind nötig.** Das System läuft auf dem privaten Postfach des Nutzers. Erstens muss die Alias-Einschränkung Teil der Suchanfrage sein — würde man alle ungelesenen Mails holen und erst danach filtern, wäre beim ersten Lauf die komplette ungelesene Privatpost heruntergeladen und als gelesen markiert. Zweitens matcht IMAP-`TO`/`CC`-SEARCH laut RFC 3501 nur als **Substring**, nicht exakt (Plus-Adressierung, Domain- oder Display-Namen-Treffer). Deshalb wird jede heruntergeladene Mail einzeln exakt geprüft und **nur bei echtem Treffer** als gelesen markiert; Substring-Kollisionen bleiben ungelesen. Ein pauschales `\Seen` nach dem Download wäre nicht rückgängig zu machen.
 
   ```ts
   import { ImapFlow } from "imapflow";
@@ -3161,15 +3161,20 @@ Dünner IMAP-Abruf ungelesener Mails via imapflow. Die Verbindung selbst wird NI
         for await (const chunk of content) {
           chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
         }
-        parsed.push(await parseRawEmail(Buffer.concat(chunks)));
-        await client.messageFlagsAdd(String(uid), ["\\Seen"], { uid: true });
+        const mail = await parseRawEmail(Buffer.concat(chunks));
+        // Nur echte Alias-Treffer verarbeiten UND als gelesen markieren.
+        // Die IMAP-Suche matcht als Substring; Kollisionen bleiben ungelesen.
+        if (filterToAlias([mail], alias).length > 0) {
+          parsed.push(mail);
+          await client.messageFlagsAdd(String(uid), ["\\Seen"], { uid: true });
+        }
       }
     } finally {
       lock.release();
       await client.logout();
     }
 
-    return filterToAlias(parsed, env.MAIL_ALIAS);
+    return parsed;
   }
   ```
 
