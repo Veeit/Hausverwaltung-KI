@@ -457,8 +457,39 @@ describe("send_reply", () => {
     ).toHaveLength(0);
   });
 
-  it("handwerker bei Status handwerker_angefragt: sendet an den Handwerker", async () => {
+  it("handwerker bei Status handwerker_angefragt OHNE Genehmigung: FEHLER, keine Mail (Regression Critical-Befund)", async () => {
+    // Sichert die behobene Sicherheitslücke ab: Vor dem Fix prüfte send_reply(handwerker)
+    // NUR den Ticket-Status. Diesen Status kann die KI aber selbst herbeiführen, ohne
+    // dass je eine Genehmigung stattfand — z.B. hier direkt per transitionTicket (force),
+    // ohne jemals request_approval + Genehmigung durchlaufen zu haben. Die approvals-
+    // Tabelle ist leer; das Gate muss trotz "passendem" Status ablehnen.
     const ticketId = makeRepairTicket(fixture);
+    transitionTicket(ticketId, "handwerker_angefragt", { force: true });
+    const { calls, sendFn } = makeSendFnFake();
+    const ctx = makeCtx(fixture, { ticketId, sendFn });
+    const tool = getTool(buildAgentTools(ctx), "send_reply");
+    const result = await tool.run({
+      recipient: "handwerker",
+      subject: "Terminbestätigung",
+      body: "Sehr geehrter Herr Schloss, der Termin passt dem Mieter.",
+    });
+    expect(result.startsWith("FEHLER: ")).toBe(true);
+    expect(calls).toHaveLength(0);
+    expect(ctx.repliedToTenant).toBe(false);
+  });
+
+  it("handwerker bei Status handwerker_angefragt MIT gültiger Genehmigung: sendet an den Handwerker", async () => {
+    const ticketId = makeRepairTicket(fixture);
+    db.insert(approvals)
+      .values({
+        ticketId,
+        summary: "Türschloss klemmt, Schlüsseldienst soll reparieren.",
+        contractorId: fixture.contractorId,
+        emailSubject: "Reparaturauftrag",
+        emailBody: "Bitte um Terminvorschlag.",
+        status: "genehmigt",
+      })
+      .run();
     transitionTicket(ticketId, "handwerker_angefragt", { force: true });
     const { calls, sendFn } = makeSendFnFake();
     const ctx = makeCtx(fixture, { ticketId, sendFn });
@@ -473,5 +504,172 @@ describe("send_reply", () => {
     expect(calls[0]!.to).toBe(fixture.contractorEmail);
     expect(calls[0]!.subject).toBe(`Terminbestätigung [HV-${ticketId}]`);
     expect(ctx.repliedToTenant).toBe(false);
+  });
+
+  it("handwerker bei Status terminiert MIT gültiger Genehmigung: sendet an den Handwerker", async () => {
+    const ticketId = makeRepairTicket(fixture);
+    db.insert(approvals)
+      .values({
+        ticketId,
+        summary: "Türschloss klemmt, Schlüsseldienst soll reparieren.",
+        contractorId: fixture.contractorId,
+        emailSubject: "Reparaturauftrag",
+        emailBody: "Bitte um Terminvorschlag.",
+        status: "genehmigt",
+      })
+      .run();
+    transitionTicket(ticketId, "terminiert", { force: true });
+    const { calls, sendFn } = makeSendFnFake();
+    const ctx = makeCtx(fixture, { ticketId, sendFn });
+    const tool = getTool(buildAgentTools(ctx), "send_reply");
+    const result = await tool.run({
+      recipient: "handwerker",
+      subject: "Terminbestätigung",
+      body: "Sehr geehrter Herr Schloss, bis dann.",
+    });
+    expect(result.startsWith("FEHLER")).toBe(false);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.to).toBe(fixture.contractorEmail);
+    expect(ctx.repliedToTenant).toBe(false);
+  });
+
+  it("Regression (Critical): Status-Bypass über Eskalations-Rückweg ohne Genehmigung wird abgelehnt", async () => {
+    // Reproduziert die im Code-Review gefundene Lücke Schritt für Schritt:
+    // 1. update_ticket legt ein Ticket an -> Status "neu"
+    // 2. ask_landlord setzt den Status automatisch auf "eskaliert"
+    // 3. update_ticket({status:"terminiert"}) wird akzeptiert, weil eskaliert -> terminiert
+    //    in TICKET_TRANSITIONS erlaubt ist (Rückweg für die Wiederaufnahme nach einer
+    //    Vermieter-Antwort) — die approvals-Tabelle bleibt dabei komplett leer.
+    // 4. send_reply(handwerker) sah vor dem Fix nur den Status "terminiert" und ließ
+    //    die Mail durch. Nach dem Fix muss Schritt 4 FEHLER liefern und der Fake-
+    //    Versand darf nicht aufgerufen werden.
+    const { calls, sendFn } = makeSendFnFake();
+    const ctx = makeCtx(fixture, { sendFn });
+    const tools = buildAgentTools(ctx);
+
+    const createResult = await getTool(tools, "update_ticket").run({
+      type: "reparatur",
+      title: "Türschloss klemmt",
+    });
+    expect(createResult.startsWith("FEHLER")).toBe(false);
+    expect(ctx.ticketId).not.toBeNull();
+
+    const escalateResult = await getTool(tools, "ask_landlord").run({
+      question: "Übernehmen wir die Kosten für den Schlüsseldienst?",
+    });
+    expect(escalateResult.startsWith("FEHLER")).toBe(false);
+    const escalatedTicket = db
+      .select()
+      .from(tickets)
+      .where(eq(tickets.id, ctx.ticketId!))
+      .get();
+    expect(escalatedTicket!.status).toBe("eskaliert");
+
+    const transitionResult = await getTool(tools, "update_ticket").run({
+      status: "terminiert",
+    });
+    expect(transitionResult.startsWith("FEHLER")).toBe(false);
+    const terminiertTicket = db
+      .select()
+      .from(tickets)
+      .where(eq(tickets.id, ctx.ticketId!))
+      .get();
+    expect(terminiertTicket!.status).toBe("terminiert");
+    expect(db.select().from(approvals).all()).toHaveLength(0);
+
+    const sendResult = await getTool(tools, "send_reply").run({
+      recipient: "handwerker",
+      subject: "Terminbestätigung",
+      body: "Sehr geehrter Herr Schloss, der Termin passt.",
+    });
+    expect(sendResult.startsWith("FEHLER: ")).toBe(true);
+    expect(calls).toHaveLength(0);
+    expect(ctx.repliedToTenant).toBe(false);
+  });
+
+  it("mieter: protokolliert in der Mieter-Conversation, nicht in der auslösenden Handwerker-Conversation", async () => {
+    // Fehlender Test für die bereits vorhandene Logik in send_reply: die Nachricht
+    // muss in der Conversation des EMPFÄNGERS (Mieter) protokolliert werden, auch
+    // wenn der Tool-Aufruf aus einem Handwerker-Kontext (ctx.conversationId zeigt auf
+    // die Handwerker-Conversation) heraus erfolgt.
+    const ticketId = makeRepairTicket(fixture);
+    const { id: contractorConversationId } = db
+      .insert(conversations)
+      .values({
+        counterpartType: "contractor",
+        counterpartId: fixture.contractorId,
+        counterpartEmail: fixture.contractorEmail,
+        subject: "Terminvorschlag Schlüsseldienst",
+      })
+      .returning({ id: conversations.id })
+      .get();
+    expect(contractorConversationId).not.toBe(fixture.conversationId);
+    const { calls, sendFn } = makeSendFnFake();
+    const ctx = makeCtx(fixture, {
+      kind: "contractor_message",
+      conversationId: contractorConversationId,
+      ticketId,
+      sendFn,
+    });
+    const tool = getTool(buildAgentTools(ctx), "send_reply");
+    const result = await tool.run({
+      recipient: "mieter",
+      subject: "Terminbestätigung",
+      body: "Sehr geehrter Herr Mustermann, der Termin steht.",
+    });
+    expect(result.startsWith("FEHLER")).toBe(false);
+    expect(calls).toHaveLength(1);
+    const outbound = db
+      .select()
+      .from(messages)
+      .where(eq(messages.direction, "outbound"))
+      .all();
+    expect(outbound).toHaveLength(1);
+    expect(outbound[0]!.conversationId).toBe(fixture.conversationId);
+    expect(outbound[0]!.conversationId).not.toBe(contractorConversationId);
+  });
+
+  it("RecipientNotAllowedError wird zu einem FEHLER-String statt einer Exception", async () => {
+    const ticketId = makeRepairTicket(fixture);
+    const { calls, sendFn } = makeSendFnFake();
+    const ctx = makeCtx(fixture, {
+      ticketId,
+      tenant: {
+        id: fixture.tenantId,
+        name: "Unbekannt",
+        email: "nicht-in-der-whitelist@example.com",
+      },
+      sendFn,
+    });
+    const tool = getTool(buildAgentTools(ctx), "send_reply");
+    const result = await tool.run({
+      recipient: "mieter",
+      subject: "Test",
+      body: "Testinhalt.",
+    });
+    expect(result.startsWith("FEHLER: ")).toBe(true);
+    expect(result).toContain("Whitelist");
+    expect(calls).toHaveLength(0);
+    expect(
+      db.select().from(messages).where(eq(messages.direction, "outbound")).all(),
+    ).toHaveLength(0);
+  });
+});
+
+describe("request_approval: ungültiger Statuswechsel", () => {
+  it("gibt FEHLER zurück, wenn der Ticket-Status keinen Wechsel zu wartet_auf_genehmigung erlaubt", async () => {
+    const ticketId = makeRepairTicket(fixture);
+    transitionTicket(ticketId, "erledigt", { force: true });
+    const ctx = makeCtx(fixture, { ticketId });
+    const tool = getTool(buildAgentTools(ctx), "request_approval");
+    const result = await tool.run({
+      summary: "Türschloss klemmt.",
+      contractorId: fixture.contractorId,
+      emailSubject: "Reparaturauftrag",
+      emailBody: "Bitte um Terminvorschlag.",
+    });
+    expect(result.startsWith("FEHLER: ")).toBe(true);
+    expect(result).toContain("Ungültiger Statuswechsel");
+    expect(db.select().from(approvals).all()).toHaveLength(0);
   });
 });
