@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { getEnv } from "@/env";
-import { pollOnce } from "@/worker/processor";
+import { pollOnce, resetStuckProcessingMessages } from "@/worker/processor";
 
 let running = true;
 let wake: (() => void) | null = null;
@@ -29,6 +29,17 @@ async function main(): Promise<void> {
   console.log("[worker] KI-Hausverwaltung — Worker gestartet.");
   console.log(`[worker] Alias: ${env.MAIL_ALIAS}`);
   console.log(`[worker] Poll-Intervall: ${env.POLL_INTERVAL_MS} ms`);
+
+  // Ein vorheriger Prozess kann mitten in einem Agent-Lauf abgestürzt sein
+  // (das größte Zeitfenster im System) und dabei Nachrichten in 'processing'
+  // zurückgelassen haben. Ohne diesen Reset blieben sie für immer hängen.
+  const resetCount = resetStuckProcessingMessages();
+  if (resetCount > 0) {
+    console.log(
+      `[worker] ${resetCount} Nachricht(en) waren nach einem vorherigen Abbruch in ` +
+        `'processing' hängen geblieben und wurden auf 'pending' zurückgesetzt.`,
+    );
+  }
 
   while (running) {
     try {

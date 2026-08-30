@@ -148,6 +148,28 @@ export async function ingestEmail(mail: IncomingEmail): Promise<number | null> {
   return messageId;
 }
 
+/**
+ * Setzt Nachrichten, die beim letzten Lauf in 'processing' hängen geblieben
+ * sind, wieder auf 'pending' zurück. runAgentOnMessage() setzt den Status auf
+ * 'processing', BEVOR der Modell-Lauf beginnt — stirbt der Prozess währenddessen
+ * (das größte Zeitfenster im System), bliebe die Nachricht ohne diesen Reset
+ * für immer in 'processing' hängen: kein automatischer Retry (processPendingMessages
+ * wählt nur 'pending') und keine Sichtbarkeit im Dashboard (die Übersicht zeigt
+ * nur 'failed'). Wird beim Start des Worker-Prozesses aufgerufen (src/worker/index.ts),
+ * nicht bei jedem Poll-Durchlauf — nach dem Start läuft jede Verarbeitung wieder
+ * über den normalen 'processing'-Zwischenstatus, der dann korrekt für die Dauer
+ * eines einzelnen, laufenden Agent-Aufrufs steht.
+ */
+export function resetStuckProcessingMessages(): number {
+  const db = getDb();
+  const result = db
+    .update(messages)
+    .set({ processingStatus: "pending" })
+    .where(eq(messages.processingStatus, "processing"))
+    .run();
+  return result.changes;
+}
+
 export async function processPendingMessages(deps?: AgentRunDeps): Promise<void> {
   const db = getDb();
   const pending = db

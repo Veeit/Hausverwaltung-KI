@@ -139,9 +139,15 @@ deshalb in einer Neustart-Schleife starten:
 until npm run worker; do echo "Worker beendet — Neustart in 5s"; sleep 5; done
 ```
 
-Beim Neustart nimmt der Worker unverarbeitete Nachrichten von selbst wieder
-auf: Eingehende Mails werden vor der Verarbeitung gespeichert und behalten den
-Status `pending`, bis der Agent sie erfolgreich abgearbeitet hat.
+Eingehende Mails werden vor der Verarbeitung gespeichert (Status `pending`);
+während der Agent an einer Nachricht arbeitet, steht sie auf `processing`.
+Stürzt der Prozess genau in diesem Moment ab — dem mit Abstand größten
+Zeitfenster im System, da ein einzelner Agent-Lauf mehrere Sekunden bis
+Minuten dauern kann —, setzt der Worker beim nächsten Start automatisch alle
+noch in `processing` hängenden Nachrichten auf `pending` zurück, sodass sie
+erneut verarbeitet werden. Ohne Neustart zeigt das Dashboard (Übersicht,
+Abschnitt „Hängende Verarbeitung") Nachrichten an, die seit mehr als fünf
+Minuten in `processing` stehen.
 
 ## Testablauf (Live-Test mit zwei eigenen Mailadressen)
 

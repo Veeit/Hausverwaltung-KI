@@ -19,7 +19,12 @@ import { createTicket } from "@/lib/tickets";
 import { setSetting } from "@/lib/settings";
 import { WORKER_PAUSED_KEY } from "@/lib/rateLimit";
 import type { AgentRunDeps } from "@/agent/run";
-import { ingestEmail, processPendingMessages, pollOnce } from "@/worker/processor";
+import {
+  ingestEmail,
+  processPendingMessages,
+  pollOnce,
+  resetStuckProcessingMessages,
+} from "@/worker/processor";
 
 let db: AppDb;
 let attachmentsDir: string;
@@ -432,6 +437,65 @@ describe("processPendingMessages", () => {
     const fake = makeAgentFake();
     await processPendingMessages(fake.deps);
     expect(fake.calls()).toBe(0);
+  });
+});
+
+// Important-Befund aus dem Abschluss-Review: runAgentOnMessage() setzt den
+// Status auf 'processing', BEVOR der Modell-Lauf beginnt. Stirbt der Prozess
+// währenddessen, bliebe die Nachricht ohne diesen Reset für immer hängen —
+// processPendingMessages() wählt nur 'pending', und die Übersicht zeigte
+// bisher nur 'failed'. Wird beim Start des Worker-Prozesses aufgerufen
+// (src/worker/index.ts), nicht bei jedem einzelnen Poll.
+describe("resetStuckProcessingMessages", () => {
+  it("setzt 'processing'-Nachrichten auf 'pending' zurück und lässt andere Status unangetastet", () => {
+    const tenantId = seedTenant();
+    const conversationId = findOrCreateConversation({
+      email: "max.mustermann@example.com",
+      counterpartType: "tenant",
+      counterpartId: tenantId,
+    });
+    const base = {
+      conversationId,
+      direction: "inbound" as const,
+      role: "tenant" as const,
+      fromEmail: "max.mustermann@example.com",
+      toEmail: "hausverwaltung@example.com",
+      body: "Text",
+    };
+    const stuckId = Number(
+      db.insert(messages).values({ ...base, subject: "hängt", processingStatus: "processing" }).run()
+        .lastInsertRowid,
+    );
+    const pendingId = Number(
+      db.insert(messages).values({ ...base, subject: "wartet", processingStatus: "pending" }).run()
+        .lastInsertRowid,
+    );
+    const doneId = Number(
+      db.insert(messages).values({ ...base, subject: "fertig", processingStatus: "done" }).run()
+        .lastInsertRowid,
+    );
+    const failedId = Number(
+      db.insert(messages).values({ ...base, subject: "kaputt", processingStatus: "failed" }).run()
+        .lastInsertRowid,
+    );
+
+    const resetCount = resetStuckProcessingMessages();
+
+    expect(resetCount).toBe(1);
+    expect(db.select().from(messages).where(eq(messages.id, stuckId)).get()!.processingStatus).toBe(
+      "pending",
+    );
+    expect(db.select().from(messages).where(eq(messages.id, pendingId)).get()!.processingStatus).toBe(
+      "pending",
+    );
+    expect(db.select().from(messages).where(eq(messages.id, doneId)).get()!.processingStatus).toBe("done");
+    expect(db.select().from(messages).where(eq(messages.id, failedId)).get()!.processingStatus).toBe(
+      "failed",
+    );
+  });
+
+  it("liefert 0, wenn keine Nachricht in 'processing' hängt", () => {
+    expect(resetStuckProcessingMessages()).toBe(0);
   });
 });
 

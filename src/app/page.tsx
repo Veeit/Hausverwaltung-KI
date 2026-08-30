@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { count, desc, eq } from "drizzle-orm";
+import { and, count, desc, eq, lt } from "drizzle-orm";
 import { getDb } from "@/db/client";
 import { approvals, escalations, messages, tickets } from "@/db/schema";
 import { TICKET_STATUSES } from "@/lib/tickets";
@@ -8,6 +8,13 @@ import { resumeWorkerAction } from "@/app/actions/worker";
 import { StatusBadge } from "@/app/components/StatusBadge";
 
 export const dynamic = "force-dynamic";
+
+// Ab wann eine 'processing'-Nachricht als hängen geblieben gilt. Normale
+// Agent-Läufe dauern Sekunden bis wenige Minuten; der Worker setzt hängen
+// gebliebene Nachrichten beim Neustart automatisch zurück (siehe
+// resetStuckProcessingMessages), aber solange kein Neustart erfolgt ist (der
+// Prozess also z.B. hängt statt abzustürzen), soll das hier sichtbar werden.
+const STUCK_PROCESSING_THRESHOLD_MS = 5 * 60 * 1000;
 
 const ROLE_LABELS: Record<string, string> = {
   tenant: "Mieter",
@@ -52,6 +59,15 @@ export default function OverviewPage() {
     .select()
     .from(messages)
     .where(eq(messages.processingStatus, "failed"))
+    .orderBy(desc(messages.id))
+    .limit(10)
+    .all();
+
+  const stuckCutoff = new Date(Date.now() - STUCK_PROCESSING_THRESHOLD_MS).toISOString();
+  const stuckMessages = db
+    .select()
+    .from(messages)
+    .where(and(eq(messages.processingStatus, "processing"), lt(messages.createdAt, stuckCutoff)))
     .orderBy(desc(messages.id))
     .limit(10)
     .all();
@@ -163,6 +179,34 @@ export default function OverviewPage() {
               </li>
             ))}
           </ul>
+        )}
+      </section>
+
+      <section>
+        <h2 className="mb-2 text-lg font-medium">Hängende Verarbeitung</h2>
+        {stuckMessages.length === 0 ? (
+          <p className="text-sm text-gray-500">
+            Keine Nachricht hängt länger als 5 Minuten in Bearbeitung.
+          </p>
+        ) : (
+          <>
+            <p className="mb-2 text-sm text-gray-600">
+              Diese Nachrichten stehen seit mehr als 5 Minuten auf &bdquo;in
+              Bearbeitung&ldquo; — vermutlich ist der Worker-Prozess währenddessen
+              abgestürzt. Ein Neustart des Workers setzt sie automatisch auf
+              &bdquo;wartend&ldquo; zurück und verarbeitet sie erneut.
+            </p>
+            <ul className="flex flex-col gap-2">
+              {stuckMessages.map((m) => (
+                <li key={m.id} className="rounded border border-amber-300 bg-amber-50 p-3">
+                  <p className="text-sm font-medium">
+                    Nachricht #{m.id} von {m.fromEmail} — {m.subject || "(kein Betreff)"}
+                  </p>
+                  <p className="text-xs text-gray-500">Seit: {m.createdAt}</p>
+                </li>
+              ))}
+            </ul>
+          </>
         )}
       </section>
 
