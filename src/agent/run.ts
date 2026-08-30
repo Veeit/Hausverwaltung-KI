@@ -55,6 +55,7 @@ export async function runAgentOnMessage(messageId: number, deps: AgentRunDeps = 
         : null,
       ticketId: trigger.ticket?.id ?? null,
       repliedToTenant: false,
+      repliedToContractor: false,
       sendFn: deps.sendFn,
     };
     const toolSpecs = buildAgentTools(ctx);
@@ -80,6 +81,35 @@ export async function runAgentOnMessage(messageId: number, deps: AgentRunDeps = 
           ticketId: ctx.ticketId,
           conversationId: ctx.conversationId,
           question: `Die KI hat auf die Mieter-Nachricht #${messageId} keine Antwort gesendet — bitte prüfen.`,
+        })
+        .run();
+    }
+
+    // Sicherheitsnetz auch für landlord_answer: Ohne dieses greift es NUR bei
+    // tenant_message, sodass eine Vermieter-Antwort spurlos verpufft, wenn die
+    // KI danach niemandem antwortet. Das passiert konkret, wenn eine Eskalation
+    // aus einer Handwerker-Nachricht OHNE zugehöriges Ticket entstand: die
+    // synthetische Vermieter-Antwort landet dann in der Handwerker-Conversation
+    // (counterpartType "contractor"), loadTriggerInfo() kann darüber keinen
+    // Mieter auflösen, ctx.tenant bleibt null, und send_reply(mieter) liefert
+    // nur "FEHLER: Kein Mieter im Kontext" zurück — ohne dieses Netz würde die
+    // Antwort des Vermieters dann einfach verschwinden, ohne dass es irgendwo
+    // auffällt.
+    if (
+      trigger.kind === "landlord_answer" &&
+      !ctx.repliedToTenant &&
+      !ctx.repliedToContractor
+    ) {
+      const vorgang = ctx.ticketId !== null ? ` (Vorgang [HV-${ctx.ticketId}])` : "";
+      db.insert(escalations)
+        .values({
+          ticketId: ctx.ticketId,
+          conversationId: ctx.conversationId,
+          question:
+            `Ihre Antwort als Vermieter (Nachricht #${messageId}${vorgang}) konnte die KI ` +
+            `nicht in eine Antwort an Mieter oder Handwerker umsetzen — es wurde keine ` +
+            `E-Mail versendet. Bitte prüfen Sie den Vorgang manuell und fassen Sie ` +
+            `gegebenenfalls selbst nach.`,
         })
         .run();
     }

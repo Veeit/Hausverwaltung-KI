@@ -379,7 +379,14 @@ describe("runAgentOnMessage", () => {
     expect(message.processingAttempts).toBe(3);
   });
 
-  it("landlord_answer ohne send_reply → KEINE Eskalation (Regel gilt nur für tenant_message)", async () => {
+  // Review-Befund: Das Sicherheitsnetz ("KI hat nicht geantwortet → eskalieren")
+  // griff bisher NUR für tenant_message. Für landlord_answer fehlte es
+  // komplett — antwortete die KI nach einer Vermieter-Antwort niemandem,
+  // verpuffte diese spurlos, ohne dass es irgendwo auffiel. Der Test war vorher
+  // bewusst umgekehrt formuliert ("KEINE Eskalation ... Regel gilt nur für
+  // tenant_message") — genau das ist der behobene Bug, der Test dokumentiert
+  // jetzt das korrigierte Verhalten.
+  it("landlord_answer ohne send_reply → Eskalation an den Vermieter (Sicherheitsnetz greift jetzt auch hier)", async () => {
     const { tenantId, conversationId } = seedTenantWorld();
     const ticketId = Number(
       db
@@ -403,7 +410,98 @@ describe("runAgentOnMessage", () => {
 
     await runAgentOnMessage(msgId, { runTools: async () => ({ stopReason: "end_turn" }) });
 
+    const esc = db.select().from(escalations).all();
+    expect(esc).toHaveLength(1);
+    expect(esc[0].ticketId).toBe(ticketId);
+    expect(esc[0].conversationId).toBe(conversationId);
+    expect(esc[0].question).toContain(`#${msgId}`);
+    expect(esc[0].question).toContain(`[HV-${ticketId}]`);
+    expect(esc[0].question).toMatch(/manuell/);
+    expect(db.select().from(messages).where(eq(messages.id, msgId)).get()!.processingStatus).toBe("done");
+  });
+
+  it("landlord_answer MIT send_reply an den Mieter → keine Zusatz-Eskalation", async () => {
+    const { conversationId } = seedTenantWorld();
+    const msgId = insertMessage({
+      conversationId,
+      role: "landlord",
+      fromEmail: "vermieter@dashboard.intern",
+      body: "Antwort des Vermieters: bitte Standardvorgehen.",
+    });
+    const sendFn = async (): Promise<void> => {};
+
+    const runTools = async ({ toolSpecs }: RunToolsParams): Promise<{ stopReason: string | null }> => {
+      const byName = new Map(toolSpecs.map((s) => [s.name, s]));
+      const r = await byName.get("send_reply")!.run({
+        recipient: "mieter",
+        subject: "Ihre Anfrage",
+        body: "Guten Tag, es gilt das Standardvorgehen.\n\nIhre Hausverwaltung (KI-Assistent)",
+      });
+      expect(r).not.toMatch(/^FEHLER/);
+      return { stopReason: "end_turn" };
+    };
+
+    await runAgentOnMessage(msgId, { runTools, sendFn });
+
     expect(db.select().from(escalations).all()).toHaveLength(0);
+  });
+
+  // Exakte Reproduktion des im Review nachgewiesenen Falls: Eine Eskalation
+  // entsteht aus einer Handwerker-Nachricht OHNE zugehöriges Ticket (z.B. eine
+  // allgemeine Rückfrage per ask_landlord, noch bevor ein Ticket angelegt
+  // wurde). answerEscalation() legt die synthetische Vermieter-Antwort in
+  // GENAU dieser Conversation ab — einer Handwerker-Conversation
+  // (counterpartType "contractor"), ticketId null. loadTriggerInfo() kann für
+  // landlord_answer ohne Ticket nur über eine tenant-Conversation einen Mieter
+  // auflösen; hier bleibt ctx.tenant also null, send_reply(mieter) liefert nur
+  // "FEHLER: Kein Mieter im Kontext" — ohne das Sicherheitsnetz verschwindet
+  // die Vermieter-Antwort dann spurlos.
+  it("landlord_answer aus einer Handwerker-Eskalation OHNE Ticket: Mieter-Bezug fehlt, Sicherheitsnetz eskaliert an den Vermieter", async () => {
+    const contractorId = Number(
+      db
+        .insert(contractors)
+        .values({ name: "Sven Schloss", email: "sven.schloss@example.com", trade: "Schlüsseldienst" })
+        .run().lastInsertRowid,
+    );
+    const contractorConvId = Number(
+      db
+        .insert(conversations)
+        .values({
+          counterpartType: "contractor",
+          counterpartId: contractorId,
+          counterpartEmail: "sven.schloss@example.com",
+        })
+        .run().lastInsertRowid,
+    );
+    const msgId = insertMessage({
+      conversationId: contractorConvId,
+      role: "landlord",
+      fromEmail: "vermieter@dashboard.intern",
+      subject: "Antwort des Vermieters",
+      body:
+        'Antwort des Vermieters auf die Rückfrage "Übernehmen wir die Anfahrt?": Ja.\n' +
+        "Bitte formuliere daraus eine Antwort an den Mieter.",
+      // ticketId bewusst nicht gesetzt (null) — genau der Bug-Auslöser.
+    });
+
+    const runTools = async ({ toolSpecs }: RunToolsParams): Promise<{ stopReason: string | null }> => {
+      const byName = new Map(toolSpecs.map((s) => [s.name, s]));
+      const r = await byName.get("send_reply")!.run({
+        recipient: "mieter",
+        subject: "Ihre Anfrage",
+        body: "Guten Tag, wir übernehmen die Anfahrt.\n\nIhre Hausverwaltung (KI-Assistent)",
+      });
+      expect(r).toContain("FEHLER: Kein Mieter im Kontext");
+      return { stopReason: "end_turn" };
+    };
+
+    await runAgentOnMessage(msgId, { runTools });
+
+    const esc = db.select().from(escalations).all();
+    expect(esc).toHaveLength(1);
+    expect(esc[0].ticketId).toBeNull();
+    expect(esc[0].conversationId).toBe(contractorConvId);
+    expect(esc[0].question).toContain(`#${msgId}`);
     expect(db.select().from(messages).where(eq(messages.id, msgId)).get()!.processingStatus).toBe("done");
   });
 });

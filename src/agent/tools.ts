@@ -33,6 +33,12 @@ export interface AgentToolContext {
   contractor: { id: number; name: string; email: string } | null;
   ticketId: number | null; // mutable: wird bei Ticket-Anlage gesetzt
   repliedToTenant: boolean; // mutable: send_reply(mieter) setzt true
+  // mutable: send_reply(handwerker) setzt true. Optional (statt required wie
+  // repliedToTenant), damit bestehende Testfixtures, die AgentToolContext ohne
+  // dieses Feld konstruieren, weiter kompilieren — runAgentOnMessage prüft nur
+  // per `!ctx.repliedToContractor`, wofür `undefined` bereits "nicht gesendet"
+  // bedeutet.
+  repliedToContractor?: boolean;
   sendFn?: typeof sendSmtp; // Test-Injektion, an sendAndLogEmail durchgereicht
 }
 
@@ -438,6 +444,8 @@ export function buildAgentTools(ctx: AgentToolContext): AgentToolSpec[] {
         }
         if (args.recipient === "mieter") {
           ctx.repliedToTenant = true;
+        } else {
+          ctx.repliedToContractor = true;
         }
         return `E-Mail an ${args.recipient === "mieter" ? "den Mieter" : "den Handwerker"} (${to}) gesendet. Betreff: "${subject}".`;
       },
