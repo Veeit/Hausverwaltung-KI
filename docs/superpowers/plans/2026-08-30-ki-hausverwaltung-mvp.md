@@ -4405,6 +4405,26 @@ strukturell identische, **nicht exportierte** lokale Kopie.
             ) {
               return `FEHLER: E-Mails an den Handwerker sind erst nach Genehmigung durch den Vermieter erlaubt (Ticket-Status handwerker_angefragt oder terminiert, aktuell: ${ticket?.status ?? "kein Ticket"}).`;
             }
+            // Die Statusprüfung allein genügt NICHT als Gate: Die KI kann den Ticket-Status
+            // selbst herbeiführen (neu → eskaliert via ask_landlord → terminiert via
+            // update_ticket, ein Rückweg, der für die Wiederaufnahme nach einer Vermieter-
+            // Antwort existiert), ohne dass je eine Genehmigung stattfand. Deshalb zusätzlich
+            // verifizieren, dass eine genehmigte approvals-Zeile für GENAU dieses Ticket und
+            // GENAU diesen Handwerker existiert.
+            const approval = db
+              .select()
+              .from(approvals)
+              .where(
+                and(
+                  eq(approvals.ticketId, ctx.ticketId),
+                  eq(approvals.status, "genehmigt"),
+                  eq(approvals.contractorId, ctx.contractor.id),
+                ),
+              )
+              .get();
+            if (!approval) {
+              return `FEHLER: Der Vermieter hat den Handwerker ${ctx.contractor.name} für diesen Vorgang noch nicht freigegeben (keine Genehmigung in den Vermieter-Unterlagen gefunden). Informiere stattdessen den Mieter oder nutze request_approval.`;
+            }
             to = ctx.contractor.email;
             targetConversationId = findOrCreateConversation({
               email: ctx.contractor.email,
