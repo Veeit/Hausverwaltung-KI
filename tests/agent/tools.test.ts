@@ -478,6 +478,31 @@ describe("send_reply", () => {
     expect(ctx.repliedToTenant).toBe(false);
   });
 
+  // Review-Befund: Die "keine Genehmigung gefunden"-Meldung verwies IMMER
+  // pauschal auf request_approval — auch wenn der Ticket-Status das gar nicht
+  // mehr zuließe. Aus handwerker_angefragt/terminiert heraus lehnt
+  // request_approval den Statuswechsel zu wartet_auf_genehmigung aber selbst
+  // ab (siehe TICKET_TRANSITIONS in src/lib/tickets.ts) — die Empfehlung war
+  // also eine falsche Fährte fürs Modell. Die Meldung muss stattdessen einen
+  // tatsächlich gangbaren nächsten Schritt nennen (hier: ask_landlord).
+  it("handwerker ohne Genehmigung: Fehlermeldung empfiehlt ask_landlord statt des aus diesem Status heraus wirkungslosen request_approval", async () => {
+    const ticketId = makeRepairTicket(fixture);
+    transitionTicket(ticketId, "handwerker_angefragt", { force: true });
+    const { sendFn } = makeSendFnFake();
+    const ctx = makeCtx(fixture, { ticketId, sendFn });
+    const tool = getTool(buildAgentTools(ctx), "send_reply");
+
+    const result = await tool.run({
+      recipient: "handwerker",
+      subject: "Terminbestätigung",
+      body: "Sehr geehrter Herr Schloss, der Termin passt dem Mieter.",
+    });
+
+    expect(result.startsWith("FEHLER: ")).toBe(true);
+    expect(result).not.toContain("request_approval");
+    expect(result).toContain("ask_landlord");
+  });
+
   it("handwerker bei Status handwerker_angefragt MIT gültiger Genehmigung: sendet an den Handwerker", async () => {
     const ticketId = makeRepairTicket(fixture);
     db.insert(approvals)

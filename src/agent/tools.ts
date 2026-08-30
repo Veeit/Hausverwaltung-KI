@@ -408,7 +408,19 @@ export function buildAgentTools(ctx: AgentToolContext): AgentToolSpec[] {
             )
             .get();
           if (!approval) {
-            return `FEHLER: Der Vermieter hat den Handwerker ${ctx.contractor.name} für diesen Vorgang noch nicht freigegeben (keine Genehmigung in den Vermieter-Unterlagen gefunden). Informiere stattdessen den Mieter oder nutze request_approval.`;
+            // request_approval nur empfehlen, wenn der Ticket-Status das aktuell
+            // überhaupt zuließe (canTransition prüft das exakt so wie
+            // request_approval selbst). Sonst würde die Meldung das Modell auf
+            // eine falsche Fährte schicken: aus handwerker_angefragt/terminiert
+            // heraus lehnt request_approval den Statuswechsel ohnehin ab, und
+            // aus erledigt heraus ist GAR kein Statuswechsel mehr möglich.
+            const naechsterSchritt = canTransition(
+              ticket.status as TicketStatus,
+              "wartet_auf_genehmigung",
+            )
+              ? "nutze request_approval"
+              : "wende dich per ask_landlord an den Vermieter";
+            return `FEHLER: Der Vermieter hat den Handwerker ${ctx.contractor.name} für diesen Vorgang noch nicht freigegeben (keine Genehmigung in den Vermieter-Unterlagen gefunden, Ticket-Status: ${ticket.status}). Informiere stattdessen den Mieter oder ${naechsterSchritt}.`;
           }
           to = ctx.contractor.email;
           targetConversationId = findOrCreateConversation({
