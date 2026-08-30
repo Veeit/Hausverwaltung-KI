@@ -17,6 +17,16 @@ const envSchema = z.object({
   // enthalten koennen und ein reiner Whitespace-Unterschied sonst zu einem
   // schwer auffindbaren "Ordner nicht gefunden"-Fehler fuehren wuerde.
   IMAP_MAILBOX: z.string().trim().min(1).default("INBOX"),
+  // Zeitliche Untergrenze der IMAP-Suche in Tagen (siehe fetchNewEmails in
+  // src/channel/imap.ts). Erlaubt der Server eigene Schlagworte, verzichtet
+  // die Suche bewusst auf den Gelesen-Status als Filter — ohne diese
+  // Untergrenze würde der Worker beim allerersten Lauf gegen einen
+  // gewachsenen Ordner JEDE jemals an den Alias gegangene Mail als neu
+  // ansehen. Ein kleiner Standardwert (wenige Tage) reicht: das Poll-
+  // Intervall liegt bei Sekunden, echte neue Mails liegen also immer weit
+  // innerhalb dieses Fensters. Die Message-ID-Deduplizierung in der
+  // Datenbank bleibt zusaetzlich als zweites Netz bestehen.
+  IMAP_LOOKBACK_DAYS: z.coerce.number().int().positive().default(3),
   SMTP_HOST: z.string().default("smtp.fastmail.com"),
   SMTP_PORT: z.coerce.number().default(465),
   MAIL_USER: z.string().min(1),          // Fastmail-Login
@@ -68,6 +78,7 @@ const FIELD_HINTS: Record<string, string> = {
   IMAP_HOST: "der Hostname des IMAP-Servers",
   IMAP_PORT: "eine Portnummer (Zahl), z. B. 993",
   IMAP_MAILBOX: "ein nicht-leerer Ordnername, z. B. INBOX",
+  IMAP_LOOKBACK_DAYS: "eine positive ganze Zahl (Tage), z. B. 3",
   SMTP_HOST: "der Hostname des SMTP-Servers",
   SMTP_PORT: "eine Portnummer (Zahl), z. B. 465",
   MAIL_USER: "die vollständige Fastmail-Login-E-Mail-Adresse",

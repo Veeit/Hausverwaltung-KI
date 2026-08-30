@@ -17,6 +17,7 @@ const MANAGED_KEYS = [
   "IMAP_HOST",
   "IMAP_PORT",
   "IMAP_MAILBOX",
+  "IMAP_LOOKBACK_DAYS",
   "SMTP_HOST",
   "SMTP_PORT",
   "MAIL_USER",
@@ -64,6 +65,7 @@ describe("getEnv", () => {
     expect(env.IMAP_HOST).toBe("imap.fastmail.com");
     expect(env.IMAP_PORT).toBe(993);
     expect(env.IMAP_MAILBOX).toBe("INBOX");
+    expect(env.IMAP_LOOKBACK_DAYS).toBe(3);
     expect(env.SMTP_HOST).toBe("smtp.fastmail.com");
     expect(env.SMTP_PORT).toBe(465);
     expect(env.MAIL_RATE_LIMIT_PER_HOUR).toBe(20);
@@ -96,6 +98,20 @@ describe("getEnv", () => {
   it("entfernt führende/abschließende Leerzeichen aus IMAP_MAILBOX", () => {
     process.env.IMAP_MAILBOX = "  Hausverwaltung TOOL FOM  ";
     expect(getEnv().IMAP_MAILBOX).toBe("Hausverwaltung TOOL FOM");
+  });
+
+  // IMAP_LOOKBACK_DAYS begrenzt die Schlagwort-basierte IMAP-Suche zeitlich
+  // (siehe src/channel/imap.ts) — ohne diese Grenze würde der allererste Lauf
+  // gegen einen gewachsenen Postfach-Ordner jede jemals an den Alias
+  // gegangene Mail als neu ansehen.
+  it("wandelt IMAP_LOOKBACK_DAYS in eine Zahl um", () => {
+    process.env.IMAP_LOOKBACK_DAYS = "7";
+    expect(getEnv().IMAP_LOOKBACK_DAYS).toBe(7);
+  });
+
+  it("wirft bei einem nicht-positiven IMAP_LOOKBACK_DAYS", () => {
+    process.env.IMAP_LOOKBACK_DAYS = "0";
+    expect(() => getEnv()).toThrow();
   });
 
   it("wirft, wenn ein Pflichtfeld fehlt", () => {

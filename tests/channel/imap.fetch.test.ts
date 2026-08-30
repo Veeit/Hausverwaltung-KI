@@ -1,4 +1,5 @@
 import { Readable } from "node:stream";
+import type { SearchObject } from "imapflow";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Haertungsluecke: fetchNewEmails() (src/channel/imap.ts) hat NULL Testabdeckung
@@ -17,24 +18,51 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // { uid, mail } zurueck, damit der Aufrufer weiss, welche UID er quittieren
 // muss.
 //
+// Live-Test-Fix (dieser Auftrag): Der Auftraggeber hatte den Mail-Thread in
+// seinem Mailclient geoeffnet, BEVOR der Worker die eingehende Antwort holen
+// konnte — dadurch wurde sie sofort als \Seen markiert und vom Worker NIE
+// verarbeitet ({ seen: false, ... } fand sie nie). \Seen gehoert nicht diesem
+// Tool, es ist daher als Verarbeitungsmerkmal ungeeignet. fetchNewEmails()
+// nutzt jetzt, wenn der Server es erlaubt (permanentFlags enthaelt "\*"), ein
+// eigenes IMAP-Schlagwort ("KIHausverwaltungVerarbeitet") ueber "unKeyword"
+// statt "seen: false" — das Anklicken einer Mail im Mailclient hat darauf
+// keinen Einfluss mehr. Erlaubt der Server keine eigenen Schlagworte, greift
+// weiterhin der alte, bewaehrte \Seen-Rueckfall. Zusaetzlich begrenzt
+// IMAP_LOOKBACK_DAYS die Schlagwort-Suche zeitlich, damit der allererste Lauf
+// gegen einen gewachsenen Ordner nicht jede jemals eingegangene Alias-Mail als
+// neu ansieht.
+//
 // Dieser Test mockt NUR die imapflow-Bibliothek (ImapFlow-Klasse); der echte
 // Code aus fetchNewEmails() UND der echte parseRawEmail()-Pfad (inkl.
 // mailparser) laufen durch. Es wird verifiziert:
 //  - Die Suchanfrage schraenkt serverseitig bereits auf den Alias ein
-//    (seen:false + or[to,cc] auf MAIL_ALIAS) - erste Datenschutz-Schicht.
+//    (or[to,cc] auf MAIL_ALIAS) - erste Datenschutz-Schicht.
 //  - Liefert der (gemockte) Server eine UID, deren heruntergeladene Mail NICHT
 //    tatsaechlich an den Alias geht (IMAP-TO/CC-SEARCH matcht laut RFC 3501 nur
 //    als Substring, der Server kann also "false positives" liefern), wird sie
-//    weder zurueckgegeben noch je als \Seen markiert - zweite Datenschutz-Schicht.
+//    weder zurueckgegeben noch je markiert - zweite Datenschutz-Schicht.
 //  - Eine Mail, die tatsaechlich an den Alias geht, wird mitsamt ihrer UID
 //    zurueckgegeben. fetchNewEmails() selbst markiert dabei NIE etwas als
-//    \Seen (das ist jetzt Aufgabe von markEmailsSeen()).
+//    verarbeitet (das ist jetzt Aufgabe von markEmailsSeen()).
 //  - Lock und Verbindung werden IMMER freigegeben (lock.release(), logout()),
 //    auch wenn beim Verarbeiten einer Mail ein Fehler auftritt.
-//  - markEmailsSeen() markiert genau die uebergebenen UIDs als \Seen und baut
-//    bei leerer Liste gar keine Verbindung auf.
+//  - markEmailsSeen() markiert genau die uebergebenen UIDs und baut bei
+//    leerer Liste gar keine Verbindung auf.
+//  - Das eigene Schlagwort wird nur genutzt, wenn der Server es unterstuetzt
+//    (permanentFlags enthaelt "\*"); sonst greift der \Seen-Rueckfall.
 //
 // Keine echte Netzwerkverbindung wird aufgebaut.
+
+// Zustand des simulierten, aktuell geoeffneten Postfach-Ordners — steuert,
+// was client.mailbox liefert und damit, ob supportsCustomKeywords() (siehe
+// src/channel/imap.ts) den Server als "unterstuetzt eigene Schlagworte"
+// einstuft. Default: ein moderner Server mit "\*" in permanentFlags — das ist
+// der beim Auftraggeber tatsaechlich verifizierte Zustand (Fastmail). Tests
+// fuer den Rueckfall ueberschreiben das gezielt.
+interface FakeMailboxInfo {
+  path: string;
+  permanentFlags?: Set<string>;
+}
 
 const {
   connectMock,
@@ -46,6 +74,7 @@ const {
   logoutMock,
   listMock,
   constructorMock,
+  mailboxState,
   FakeImapFlow,
 } = vi.hoisted(() => {
   const connectMock = vi.fn().mockResolvedValue(undefined);
@@ -61,6 +90,13 @@ const {
   const listMock = vi.fn().mockResolvedValue([{ path: "INBOX" }]);
   const constructorMock = vi.fn();
 
+  // Mutable Box statt einer einfachen Variable: der Getter unten faengt sie
+  // per Closure ein, Tests koennen "mailboxState.current" jederzeit gezielt
+  // umschreiben (siehe FakeMailboxInfo oben).
+  const mailboxState: { current: { path: string; permanentFlags?: Set<string> } | false } = {
+    current: { path: "INBOX", permanentFlags: new Set(["\\Answered", "\\Seen", "\\*"]) },
+  };
+
   class FakeImapFlow {
     constructor(opts: unknown) {
       constructorMock(opts);
@@ -72,6 +108,9 @@ const {
     messageFlagsAdd = messageFlagsAddMock;
     logout = logoutMock;
     list = listMock;
+    get mailbox() {
+      return mailboxState.current;
+    }
   }
 
   return {
@@ -84,6 +123,7 @@ const {
     logoutMock,
     listMock,
     constructorMock,
+    mailboxState,
     FakeImapFlow,
   };
 });
@@ -93,6 +133,18 @@ vi.mock("imapflow", () => ({ ImapFlow: FakeImapFlow }));
 import { fetchNewEmails, markEmailsSeen, ImapMailboxNotFoundError } from "@/channel/imap";
 
 const ALIAS = "hausverwaltung@example.com";
+
+// Muss exakt dem internen Schlagwort in src/channel/imap.ts entsprechen —
+// bewusst als Literal dupliziert (statt importiert): so pruefen die Tests das
+// tatsaechliche Wire-Format der IMAP-Suche/-Markierung, nicht nur, dass
+// irgendeine interne Konstante verwendet wurde.
+const PROCESSED_KEYWORD = "KIHausverwaltungVerarbeitet";
+
+// Server, der eigene Schlagworte erlaubt (Default-Zustand, siehe oben).
+const SUPPORTS_KEYWORDS: FakeMailboxInfo = {
+  path: "INBOX",
+  permanentFlags: new Set(["\\Answered", "\\Seen", "\\*"]),
+};
 
 // Echte RFC-822-Quelltexte, damit parseRawEmail() (mailparser) real mitlaeuft.
 function rawEmail(opts: { messageId: string; to: string; subject: string; text: string }): Buffer {
@@ -136,6 +188,7 @@ describe("fetchNewEmails (echte IMAP-Orchestrierung, imapflow gemockt)", () => {
     process.env.MAIL_ALIAS = ALIAS;
     process.env.DASHBOARD_PASSWORD = "test";
     delete process.env.IMAP_MAILBOX;
+    delete process.env.IMAP_LOOKBACK_DAYS;
 
     constructorMock.mockClear();
     connectMock.mockClear();
@@ -148,21 +201,32 @@ describe("fetchNewEmails (echte IMAP-Orchestrierung, imapflow gemockt)", () => {
     logoutMock.mockClear();
     listMock.mockClear();
     listMock.mockResolvedValue([{ path: "INBOX" }]);
+    mailboxState.current = { ...SUPPORTS_KEYWORDS, permanentFlags: new Set(SUPPORTS_KEYWORDS.permanentFlags) };
   });
 
-  it("sucht serverseitig bereits eingeschränkt (seen:false, or[to,cc]=MAIL_ALIAS)", async () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("sucht serverseitig bereits eingeschränkt (unKeyword statt seen:false, or[to,cc]=MAIL_ALIAS, since=Lookback-Fenster) — Server unterstützt eigene Schlagworte", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-30T10:00:00Z"));
     searchMock.mockResolvedValue([]);
 
     await fetchNewEmails();
 
     expect(searchMock).toHaveBeenCalledTimes(1);
     expect(searchMock).toHaveBeenCalledWith(
-      { seen: false, or: [{ to: ALIAS }, { cc: ALIAS }] },
+      {
+        unKeyword: PROCESSED_KEYWORD,
+        since: new Date("2026-08-27T10:00:00Z"), // Default IMAP_LOOKBACK_DAYS = 3
+        or: [{ to: ALIAS }, { cc: ALIAS }],
+      },
       { uid: true },
     );
   });
 
-  it("verwirft eine vom Server gelieferte Mail, die NICHT an den Alias geht: kein Ergebnis, kein \\Seen", async () => {
+  it("verwirft eine vom Server gelieferte Mail, die NICHT an den Alias geht: kein Ergebnis, kein Markieren", async () => {
     searchMock.mockResolvedValue([2]);
     downloadMock.mockResolvedValue(downloadFor(nonMatchingRaw));
 
@@ -172,7 +236,7 @@ describe("fetchNewEmails (echte IMAP-Orchestrierung, imapflow gemockt)", () => {
     expect(messageFlagsAddMock).not.toHaveBeenCalled();
   });
 
-  it("liefert eine tatsächlich an den Alias adressierte Mail zusammen mit ihrer UID zurück — OHNE sie als \\Seen zu markieren", async () => {
+  it("liefert eine tatsächlich an den Alias adressierte Mail zusammen mit ihrer UID zurück — OHNE sie zu markieren", async () => {
     searchMock.mockResolvedValue([1]);
     downloadMock.mockResolvedValue(downloadFor(matchingRaw));
 
@@ -182,8 +246,8 @@ describe("fetchNewEmails (echte IMAP-Orchestrierung, imapflow gemockt)", () => {
     expect(result[0]?.uid).toBe(1);
     expect(result[0]?.mail.subject).toBe("Türschloss klemmt");
     expect(result[0]?.mail.to).toEqual([ALIAS]);
-    // fetchNewEmails markiert selbst NIE etwas als \Seen — das ist jetzt
-    // Aufgabe des Aufrufers (erst nach erfolgreicher Persistierung).
+    // fetchNewEmails markiert selbst NIE etwas — das ist jetzt Aufgabe des
+    // Aufrufers (erst nach erfolgreicher Persistierung, via markEmailsSeen()).
     expect(messageFlagsAddMock).not.toHaveBeenCalled();
   });
 
@@ -253,6 +317,7 @@ describe("markEmailsSeen (quittiert Mails erst NACH erfolgreicher Persistierung 
     process.env.MAIL_ALIAS = ALIAS;
     process.env.DASHBOARD_PASSWORD = "test";
     delete process.env.IMAP_MAILBOX;
+    delete process.env.IMAP_LOOKBACK_DAYS;
 
     constructorMock.mockClear();
     connectMock.mockClear();
@@ -263,16 +328,31 @@ describe("markEmailsSeen (quittiert Mails erst NACH erfolgreicher Persistierung 
     logoutMock.mockClear();
     listMock.mockClear();
     listMock.mockResolvedValue([{ path: "INBOX" }]);
+    mailboxState.current = { ...SUPPORTS_KEYWORDS, permanentFlags: new Set(SUPPORTS_KEYWORDS.permanentFlags) };
   });
 
-  it("markiert die übergebenen UIDs als \\Seen und gibt Lock/Verbindung frei", async () => {
+  it("markiert die übergebenen UIDs mit dem Verarbeitungs-Schlagwort UND \\Seen und gibt Lock/Verbindung frei (Server unterstützt eigene Schlagworte)", async () => {
     await markEmailsSeen([1, 2, 3]);
 
     expect(connectMock).toHaveBeenCalledTimes(1);
     expect(messageFlagsAddMock).toHaveBeenCalledTimes(1);
-    expect(messageFlagsAddMock).toHaveBeenCalledWith([1, 2, 3], ["\\Seen"], { uid: true });
+    // \Seen bleibt zusätzlich gesetzt — rein kosmetisch für den Vermieter,
+    // NICHT mehr das für die Verarbeitung maßgebliche Merkmal.
+    expect(messageFlagsAddMock).toHaveBeenCalledWith(
+      [1, 2, 3],
+      [PROCESSED_KEYWORD, "\\Seen"],
+      { uid: true },
+    );
     expect(lockReleaseMock).toHaveBeenCalledTimes(1);
     expect(logoutMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("markiert NUR mit \\Seen, wenn der Server keine eigenen Schlagworte erlaubt", async () => {
+    mailboxState.current = { path: "INBOX", permanentFlags: new Set(["\\Seen", "\\Answered"]) };
+
+    await markEmailsSeen([7]);
+
+    expect(messageFlagsAddMock).toHaveBeenCalledWith([7], ["\\Seen"], { uid: true });
   });
 
   it("baut bei leerer UID-Liste gar keine Verbindung auf", async () => {
@@ -311,6 +391,7 @@ describe("IMAP_MAILBOX (konfigurierbarer Postfach-Ordner statt fest verdrahtetem
     process.env.MAIL_ALIAS = ALIAS;
     process.env.DASHBOARD_PASSWORD = "test";
     delete process.env.IMAP_MAILBOX;
+    delete process.env.IMAP_LOOKBACK_DAYS;
 
     constructorMock.mockClear();
     connectMock.mockClear();
@@ -324,6 +405,7 @@ describe("IMAP_MAILBOX (konfigurierbarer Postfach-Ordner statt fest verdrahtetem
     logoutMock.mockClear();
     listMock.mockClear();
     listMock.mockResolvedValue([{ path: "INBOX" }]);
+    mailboxState.current = { ...SUPPORTS_KEYWORDS, permanentFlags: new Set(SUPPORTS_KEYWORDS.permanentFlags) };
   });
 
   afterEach(() => {
@@ -390,5 +472,191 @@ describe("IMAP_MAILBOX (konfigurierbarer Postfach-Ordner statt fest verdrahtetem
     getMailboxLockMock.mockRejectedValueOnce(new Error("Netzwerkfehler beim Öffnen"));
 
     await expect(fetchNewEmails()).rejects.toThrow("Netzwerkfehler beim Öffnen");
+  });
+});
+
+// Kern DIESES Bugfixes: der Auftraggeber hatte den Mail-Thread im eigenen
+// Mailclient geöffnet, bevor der Worker die eingehende Mieter-Antwort holen
+// konnte. Das markierte sie sofort als \Seen — der Worker suchte aber nach
+// { seen: false, ... } und fand sie NIE. Die Mail lag im richtigen Ordner,
+// korrekt an den Alias adressiert, aber dauerhaft übersprungen. Die
+// Korrektur: ein eigenes IMAP-Schlagwort als Verarbeitungsmerkmal statt des
+// Gelesen-Status, mit Rückfall auf \Seen für Server ohne Schlagwort-
+// Unterstützung und einer zeitlichen Untergrenze gegen eine Altbestands-Flut
+// beim allerersten Lauf.
+//
+// Die folgenden Tests simulieren serverseitige Suchsemantik minimal selbst
+// (installFakeServer): sie bilden GENAU die Prädikate nach, die
+// fetchNewEmails() tatsächlich sendet (seen, unKeyword, since, or[to,cc]),
+// damit nicht nur die FORM der Suchanfrage geprüft wird, sondern ihre
+// tatsächliche WIRKUNG — ein Test, der unter dem alten { seen: false, ... }
+// -Code nachweisbar fehlschlägt (siehe Rot-Phase im Bericht).
+describe("Verarbeitungsmerkmal: eigenes IMAP-Schlagwort statt Gelesen-Status (Live-Test-Fix)", () => {
+  interface FakeServerMessage {
+    uid: number;
+    raw: Buffer;
+    to: string;
+    seen: boolean;
+    keywords: Set<string>;
+    internalDate: Date;
+  }
+
+  function installFakeServer(messages: FakeServerMessage[]): void {
+    searchMock.mockImplementation(async (query: SearchObject) => {
+      return messages
+        .filter((m) => {
+          if (query.seen === false && m.seen) return false;
+          if (query.unKeyword && m.keywords.has(query.unKeyword)) return false;
+          if (query.since) {
+            const since = query.since instanceof Date ? query.since : new Date(query.since);
+            if (m.internalDate.getTime() < since.getTime()) return false;
+          }
+          if (query.or) {
+            const aliasHit = query.or.some((cond) => cond.to === m.to || cond.cc === m.to);
+            if (!aliasHit) return false;
+          }
+          return true;
+        })
+        .map((m) => m.uid);
+    });
+    downloadMock.mockImplementation(async (uid: string) => {
+      const msg = messages.find((m) => String(m.uid) === uid);
+      if (!msg) throw new Error(`unerwartete UID ${uid}`);
+      return downloadFor(msg.raw);
+    });
+  }
+
+  beforeEach(() => {
+    process.env.ANTHROPIC_API_KEY = "test";
+    process.env.MAIL_USER = "login@example.com";
+    process.env.MAIL_PASSWORD = "app-passwort";
+    process.env.MAIL_ALIAS = ALIAS;
+    process.env.DASHBOARD_PASSWORD = "test";
+    delete process.env.IMAP_MAILBOX;
+    delete process.env.IMAP_LOOKBACK_DAYS;
+
+    constructorMock.mockClear();
+    connectMock.mockClear();
+    lockReleaseMock.mockClear();
+    getMailboxLockMock.mockClear();
+    getMailboxLockMock.mockResolvedValue({ release: lockReleaseMock });
+    searchMock.mockReset();
+    downloadMock.mockReset();
+    messageFlagsAddMock.mockClear();
+    logoutMock.mockClear();
+    listMock.mockClear();
+    listMock.mockResolvedValue([{ path: "INBOX" }]);
+    mailboxState.current = { ...SUPPORTS_KEYWORDS, permanentFlags: new Set(SUPPORTS_KEYWORDS.permanentFlags) };
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    delete process.env.IMAP_LOOKBACK_DAYS;
+  });
+
+  // WICHTIGSTER TEST: genau der Fall des Auftraggebers.
+  it("eine bereits gelesene (\\Seen), aber noch NICHT verarbeitete Mail wird gefunden und verarbeitet", async () => {
+    installFakeServer([
+      {
+        uid: 1,
+        raw: matchingRaw,
+        to: ALIAS,
+        seen: true, // im Mailclient bereits geöffnet — wie beim Auftraggeber
+        keywords: new Set(), // vom Tool noch nicht verarbeitet
+        internalDate: new Date(), // eindeutig innerhalb des Lookback-Fensters
+      },
+    ]);
+
+    const result = await fetchNewEmails();
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.uid).toBe(1);
+    expect(result[0]?.mail.subject).toBe("Türschloss klemmt");
+
+    // Die Suche selbst darf \Seen nicht mehr als Kriterium verwenden — das
+    // ist der eigentliche Mechanismus des Fixes, nicht nur sein Ergebnis.
+    expect(searchMock.mock.calls[0]?.[0]).not.toHaveProperty("seen");
+    expect(searchMock.mock.calls[0]?.[0]).toMatchObject({ unKeyword: PROCESSED_KEYWORD });
+  });
+
+  it("eine bereits verarbeitete Mail (Schlagwort gesetzt) wird NICHT erneut geholt", async () => {
+    installFakeServer([
+      {
+        uid: 2,
+        raw: matchingRaw,
+        to: ALIAS,
+        seen: false, // ungelesen ist bei der neuen Logik unerheblich
+        keywords: new Set([PROCESSED_KEYWORD]), // bereits vom Tool verarbeitet
+        internalDate: new Date(),
+      },
+    ]);
+
+    const result = await fetchNewEmails();
+
+    expect(result).toEqual([]);
+  });
+
+  it("fällt zurück auf den Gelesen-Status, wenn der Server keine eigenen Schlagworte erlaubt (permanentFlags ohne \"\\*\" oder ganz fehlend)", async () => {
+    mailboxState.current = { path: "INBOX", permanentFlags: new Set(["\\Seen", "\\Answered"]) };
+    searchMock.mockResolvedValue([]);
+
+    await fetchNewEmails();
+
+    expect(searchMock).toHaveBeenCalledWith(
+      { seen: false, or: [{ to: ALIAS }, { cc: ALIAS }] },
+      { uid: true },
+    );
+
+    searchMock.mockClear();
+    await markEmailsSeen([9]);
+    expect(messageFlagsAddMock).toHaveBeenCalledWith([9], ["\\Seen"], { uid: true });
+
+    // Fehlt permanentFlags komplett (Server meldet es gar nicht), gilt
+    // dieselbe konservative Regel: kein bestätigtes "\*" → kein Schlagwort.
+    mailboxState.current = { path: "INBOX" };
+    searchMock.mockClear();
+    searchMock.mockResolvedValue([]);
+    await fetchNewEmails();
+    expect(searchMock).toHaveBeenCalledWith(
+      { seen: false, or: [{ to: ALIAS }, { cc: ALIAS }] },
+      { uid: true },
+    );
+  });
+
+  it("die zeitliche Begrenzung (IMAP_LOOKBACK_DAYS, konfigurierbar) ist Teil der Suchanfrage", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-30T12:00:00Z"));
+    process.env.IMAP_LOOKBACK_DAYS = "5";
+    searchMock.mockResolvedValue([]);
+
+    await fetchNewEmails();
+
+    expect(searchMock).toHaveBeenCalledWith(
+      expect.objectContaining({ since: new Date("2026-08-25T12:00:00Z") }),
+      { uid: true },
+    );
+  });
+
+  it("eine Mail außerhalb des Lookback-Fensters wird von der (simulierten) Serversuche nicht geliefert", async () => {
+    // Bewusst mit der ECHTEN Uhr (keine Fake-Timer): der reale Download-Pfad
+    // liest aus einem echten node:stream Readable — das verträgt sich nicht
+    // zuverlässig mit gefakten Timern, sobald tatsächlich ein Treffer
+    // heruntergeladen würde. Eine relativ zu Date.now() weit in der
+    // Vergangenheit liegende internalDate reicht für diesen Test völlig aus.
+    process.env.IMAP_LOOKBACK_DAYS = "3";
+    installFakeServer([
+      {
+        uid: 3,
+        raw: matchingRaw,
+        to: ALIAS,
+        seen: false,
+        keywords: new Set(),
+        internalDate: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), // 30 Tage alt
+      },
+    ]);
+
+    const result = await fetchNewEmails();
+
+    expect(result).toEqual([]);
   });
 });
