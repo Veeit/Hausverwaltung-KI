@@ -3,7 +3,7 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
-import { getEnv } from "@/env";
+import { getDbEnv } from "@/env";
 import { DDL_SQL } from "./ddl";
 import * as schema from "./schema";
 
@@ -31,7 +31,10 @@ export function getDb(): AppDb {
     return testOverride;
   }
   if (!singleton) {
-    singleton = createDb(getEnv().DATABASE_PATH);
+    // Bewusst getDbEnv() statt getEnv(): reiner Datenbankzugriff (z.B.
+    // `npm run seed` oder die Stammdaten-Ansichten im Dashboard) darf nicht
+    // an einer noch unvollständigen Mail-/Anthropic-Konfiguration scheitern.
+    singleton = createDb(getDbEnv().DATABASE_PATH);
   }
   return singleton;
 }

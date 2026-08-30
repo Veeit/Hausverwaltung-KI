@@ -22,6 +22,16 @@ const envSchema = z.object({
 
 export type Env = z.infer<typeof envSchema>;
 
+// Schema fuer den Teil der Konfiguration, den reiner Datenbankzugriff
+// braucht. Bewusst von envSchema getrennt (siehe getDbEnv()): Skripte wie
+// `npm run seed` und die Stammdaten-Ansichten im Dashboard duerfen laufen,
+// bevor Mail/Anthropic ueberhaupt eingerichtet sind.
+const dbEnvSchema = z.object({
+  DATABASE_PATH: z.string().default("./data/hausverwaltung.db"),
+});
+
+export type DbEnv = z.infer<typeof dbEnvSchema>;
+
 // Variablen, deren Wert ein Geheimnis ist (API-Schluessel, Passwoerter).
 // Deren Inhalt darf in einer Fehlermeldung NIE im Klartext auftauchen —
 // dort genuegt der Variablenname.
@@ -93,6 +103,16 @@ function formatEnvError(error: ZodError): Error {
 // oder Werte ungueltig sind — siehe formatEnvError().
 export function getEnv(): Env {
   const result = envSchema.safeParse(process.env);
+  if (!result.success) {
+    throw formatEnvError(result.error);
+  }
+  return result.data;
+}
+
+// Schmaler Zugriff nur auf die Datenbank-Konfiguration — siehe dbEnvSchema.
+// Nutzt dieselbe lesbare Fehlermeldung wie getEnv().
+export function getDbEnv(): DbEnv {
+  const result = dbEnvSchema.safeParse(process.env);
   if (!result.success) {
     throw formatEnvError(result.error);
   }
