@@ -3118,7 +3118,9 @@ Dünner IMAP-Abruf ungelesener Mails via imapflow. Die Verbindung selbst wird NI
 
 - [ ] **Step 3: `src/channel/imap.ts` implementieren**
 
-  Ablauf exakt nach Vertrag: connect → `getMailboxLock("INBOX")` → `search({ seen: false })` → je UID Quelle herunterladen und parsen → `\Seen` setzen (ALLE verarbeiteten Mails, auch fremde — sonst würden sie ewig neu geholt) → Lock-Release + Logout im `finally` → nur Alias-Treffer zurückgeben.
+  Ablauf: connect → `getMailboxLock("INBOX")` → Suche **eingeschränkt auf den Alias** (`{ seen: false, or: [{ to: alias }, { cc: alias }] }`) → je UID Quelle herunterladen und parsen → `\Seen` setzen → Lock-Release + Logout im `finally` → `filterToAlias` als zweites Netz.
+
+  **Die Einschränkung muss in der Suchanfrage liegen, nicht erst im Filter.** Das System läuft auf dem privaten Postfach des Nutzers. Würde man alle ungelesenen Mails holen und erst danach filtern, würde beim ersten Lauf die komplette ungelesene Privatpost heruntergeladen und als gelesen markiert — ein nicht rückgängig zu machender Eingriff in fremde Daten. Die clientseitige Filterung bleibt zusätzlich bestehen, weil IMAP-Server Header-Substrings großzügiger matchen können.
 
   ```ts
   import { ImapFlow } from "imapflow";
@@ -3145,7 +3147,14 @@ Dünner IMAP-Abruf ungelesener Mails via imapflow. Die Verbindung selbst wird NI
     const parsed: IncomingEmail[] = [];
     const lock = await client.getMailboxLock("INBOX");
     try {
-      const uids = (await client.search({ seen: false }, { uid: true })) || [];
+      // Alias-Einschränkung MUSS hier stehen: Ohne sie würde die private Post
+      // des Nutzers heruntergeladen und als gelesen markiert.
+      const alias = env.MAIL_ALIAS;
+      const uids =
+        (await client.search(
+          { seen: false, or: [{ to: alias }, { cc: alias }] },
+          { uid: true },
+        )) || [];
       for (const uid of uids) {
         const { content } = await client.download(String(uid), undefined, { uid: true });
         const chunks: Buffer[] = [];
