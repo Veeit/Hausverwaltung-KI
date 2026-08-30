@@ -19,6 +19,7 @@
 - KI: Modell **`claude-opus-5`**, `max_tokens: 16000`; Tool Runner `client.beta.messages.toolRunner` mit `betaZodTool` aus `@anthropic-ai/sdk/helpers/beta/zod`; Refusal-Fallback `betas: ["server-side-fallback-2026-06-01"]`, `fallbacks: [{ model: "claude-opus-4-8" }]`; `max_iterations: 16`.
 - **Adaptives Thinking** (Spec §6) wird durch **Weglassen** des `thinking`-Parameters erreicht: Auf Claude Opus 5 ist Thinking standardmäßig aktiv, ein fehlender Parameter entspricht exakt `{ type: "adaptive" }`. Den Parameter also **nicht** setzen — `{ type: "enabled", budget_tokens: N }` würde auf diesem Modell mit HTTP 400 abgelehnt.
 - zod `^3.25`; Pfad-Alias `@/*` → `./src/*` in tsconfig UND vitest.config.
+- **Agent-Tool-Schemata werden aus `zod/v4` gebaut, nicht aus `zod`.** `betaZodTool` nutzt intern die v4-API; ein v3-Schema crasht dort synchron mit einem `TypeError`, bevor eine Anfrage rausgeht — und zwar unbemerkt, solange kein Test den echten Runner-Pfad durchläuft. Übrige Schemata (z.B. `src/env.ts`) bleiben bei `zod`.
 - Tests: vitest unter `tests/` (spiegelt `src/`), In-Memory-DB via `tests/helpers/db.ts` (`makeTestDb()` + `afterEach(() => setDbForTesting(null))`); Env-Pflichtwerte je Testdatei via `process.env` setzen.
 - Alle UI-/Mail-Texte Deutsch, Mieter siezen; KI signiert als „Ihre Hausverwaltung (KI-Assistent)“. Statuswerte/Enums deutsch (`neu`, `infosammlung`, …), Code-Identifier englisch.
 - Zeitstempel: ISO-8601 (UTC) via `new Date().toISOString()`.
@@ -4020,8 +4021,14 @@ strukturell identische, **nicht exportierte** lokale Kopie.
   Datei `src/agent/tools.ts` anlegen:
 
   ```ts
-  import { z } from "zod";
-  import { eq } from "drizzle-orm";
+  // WICHTIG: zod/v4, nicht "zod". betaZodTool aus dem Anthropic-SDK importiert
+  // intern zod/v4 und ruft z.toJSONSchema() auf; ein v3-Schema führt dort zu einem
+  // Laufzeit-TypeError ("Cannot read properties of undefined (reading 'def')"),
+  // noch bevor eine Netzwerkanfrage stattfindet — und zwar unbemerkt, solange kein
+  // Test den echten Runner-Pfad durchläuft. Das installierte zod@3.25 liefert die
+  // v4-API unter diesem Subpfad bereits mit; kein Versionswechsel nötig.
+  import { z } from "zod/v4";
+  import { and, eq } from "drizzle-orm";
   import { getDb } from "@/db/client";
   import { approvals, contractors, escalations, messages, tickets } from "@/db/schema";
   import {
@@ -5718,7 +5725,7 @@ async function defaultRunTools({ system, content, toolSpecs }: RunToolsParams): 
     fallbacks: [{ model: "claude-opus-4-8" }],
     max_iterations: 16,
     system,
-    tools: toolSpecs.map((s) => betaZodTool({ name: s.name, description: s.description, inputSchema: s.inputSchema as never, run: s.run })),
+    tools: toolSpecs.map((s) => betaZodTool({ name: s.name, description: s.description, inputSchema: s.inputSchema, run: s.run })),
     messages: [{ role: "user", content }],
   });
   return { stopReason: finalMessage.stop_reason };
