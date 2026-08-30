@@ -56,6 +56,13 @@ describe("isAllowedRecipient", () => {
     expect(isAllowedRecipient("Max.Mustermann@Example.COM")).toBe(true);
     expect(isAllowedRecipient("KLAUS.ROHR@EXAMPLE.COM")).toBe(true);
   });
+
+  // Review-Befund: Adressen mit umgebenden Leerzeichen (z.B. aus einem
+  // kopierten Mail-Header) wurden vor dem Fix faelschlich abgelehnt.
+  it("ignoriert umgebende Leerzeichen (kopierte Mail-Header)", () => {
+    expect(isAllowedRecipient("  max.mustermann@example.com  ")).toBe(true);
+    expect(isAllowedRecipient("\tklaus.rohr@example.com\n")).toBe(true);
+  });
 });
 
 describe("assertAllowedRecipient", () => {

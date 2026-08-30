@@ -47,6 +47,27 @@ describe("findOrCreateConversation", () => {
     expect(db.select().from(conversations).all()).toHaveLength(1);
   });
 
+  // Review-Befund: Ohne .trim() legte eine E-Mail mit umgebenden Leerzeichen
+  // (z.B. aus einem kopierten Mail-Header) eine ZWEITE, doppelte Conversation
+  // an, statt die bestehende zu finden.
+  it("ignoriert umgebende Leerzeichen und findet dieselbe Conversation", () => {
+    const first = findOrCreateConversation({
+      email: "max.mustermann@example.com",
+      counterpartType: "tenant",
+      counterpartId: 1,
+    });
+    const second = findOrCreateConversation({
+      email: "  max.mustermann@example.com  ",
+      counterpartType: "tenant",
+      counterpartId: 1,
+    });
+
+    expect(second).toBe(first);
+    expect(db.select().from(conversations).all()).toHaveLength(1);
+    const row = db.select().from(conversations).where(eq(conversations.id, first)).get();
+    expect(row?.counterpartEmail).toBe("max.mustermann@example.com");
+  });
+
   it("wertet eine unknown-Conversation zu tenant auf, wenn der Absender später bekannt ist", () => {
     const id = findOrCreateConversation({
       email: "max.mustermann@example.com",

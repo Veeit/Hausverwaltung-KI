@@ -9,7 +9,11 @@ export function findOrCreateConversation(input: {
   subject?: string;
 }): number {
   const db = getDb();
-  const email = input.email.toLowerCase();
+  // .trim() wie in src/lib/recipients.ts: ohne diesen Trim würde dieselbe
+  // E-Mail-Adresse mit Leerzeichen-Umgebung (z.B. aus einem kopierten
+  // Mail-Header) eine zweite, doppelte Conversation anlegen statt die
+  // bestehende zu finden.
+  const email = input.email.trim().toLowerCase();
 
   const existing = db
     .select()

@@ -58,8 +58,12 @@ export async function ingestEmail(mail: IncomingEmail): Promise<number | null> {
     .get();
   if (existing) return null;
 
-  // 2. Rollen-Klassifikation über die Absenderadresse (DB speichert lowercase)
-  const from = mail.from.toLowerCase();
+  // 2. Rollen-Klassifikation über die Absenderadresse (DB speichert lowercase,
+  //    getrimmt). .trim() wie in src/lib/recipients.ts: ohne diesen Trim würde
+  //    eine Absenderadresse mit Leerzeichen-Umgebung fälschlich als
+  //    unbekannter Absender (role "unknown") eingestuft, obwohl Mieter oder
+  //    Handwerker mit genau dieser (getrimmten) Adresse hinterlegt sind.
+  const from = mail.from.trim().toLowerCase();
   const tenant = db.select().from(tenants).where(eq(tenants.email, from)).get();
   const contractor = tenant
     ? undefined

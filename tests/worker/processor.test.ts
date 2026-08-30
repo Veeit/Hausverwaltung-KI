@@ -129,6 +129,24 @@ describe("ingestEmail", () => {
     expect(msg.processingStatus).toBe("pending");
   });
 
+  // Review-Befund: Ohne .trim() auf mail.from wurde ein bekannter Mieter mit
+  // umgebenden Leerzeichen in der Absenderadresse (z.B. durch einen
+  // eigenwillig kopierten Mail-Header) faelschlich als role "unknown"
+  // eingestuft — die Nachricht waere dann NIE beantwortet worden.
+  it("klassifiziert einen bekannten Mieter trotz umgebender Leerzeichen in der Absenderadresse korrekt", async () => {
+    seedTenant();
+    const id = await ingestEmail(
+      makeMail({
+        from: "  max.mustermann@example.com  ",
+        messageId: "<msg-whitespace@example.com>",
+      }),
+    );
+    const msg = db.select().from(messages).where(eq(messages.id, id!)).get()!;
+    expect(msg.role).toBe("tenant");
+    expect(msg.processingStatus).toBe("pending");
+    expect(msg.fromEmail).toBe("max.mustermann@example.com");
+  });
+
   it("legt unbekannte Absender als role 'unknown' mit Status 'done' ab — kein Agent-Lauf", async () => {
     const id = await ingestEmail(
       makeMail({ from: "fremd@example.com", messageId: "<msg-3@example.com>" }),

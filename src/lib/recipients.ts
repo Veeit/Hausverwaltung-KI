@@ -6,7 +6,12 @@ export class RecipientNotAllowedError extends Error {}
 
 export function isAllowedRecipient(email: string): boolean {
   const db = getDb();
-  const normalized = email.toLowerCase();
+  // .trim() vor dem Vergleich: Adressen aus kopierten Mail-Headern oder
+  // ähnlichen Quellen können führende/nachgestellte Leerzeichen mitbringen.
+  // Ohne Trim würden solche Adressen fälschlich abgelehnt (die DB speichert
+  // stets getrimmt) — die Fehlrichtung ist zwar ungefährlich (zu streng statt
+  // zu lax), führt in der Praxis aber zu unerklärlichen Blockaden.
+  const normalized = email.trim().toLowerCase();
   const tenant = db
     .select({ id: tenants.id })
     .from(tenants)
