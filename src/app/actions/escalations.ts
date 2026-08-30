@@ -7,11 +7,12 @@ import { escalations, messages, tickets } from "@/db/schema";
 import { getEnv } from "@/env";
 import { ensureTag } from "@/lib/subject";
 import { requireAuth } from "@/app/actions/auth";
+import { OK, fail, type ActionResult } from "@/lib/actionResult";
 
 export async function answerEscalation(
   escalationId: number,
   answer: string,
-): Promise<void> {
+): Promise<ActionResult> {
   await requireAuth();
   const db = getDb();
 
@@ -21,13 +22,13 @@ export async function answerEscalation(
     .where(eq(escalations.id, escalationId))
     .get();
   if (!escalation) {
-    throw new Error(`Eskalation ${escalationId} nicht gefunden.`);
+    return fail(`Eskalation ${escalationId} nicht gefunden.`);
   }
   if (escalation.status !== "offen") {
-    throw new Error(`Eskalation ${escalationId} ist bereits beantwortet.`);
+    return fail(`Eskalation ${escalationId} ist bereits beantwortet.`);
   }
   if (answer.trim() === "") {
-    throw new Error("Die Antwort darf nicht leer sein.");
+    return fail("Die Antwort darf nicht leer sein.");
   }
 
   db.update(escalations)
@@ -66,4 +67,5 @@ export async function answerEscalation(
 
   revalidatePath("/eskalationen");
   revalidatePath("/");
+  return OK;
 }

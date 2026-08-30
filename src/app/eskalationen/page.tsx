@@ -6,6 +6,8 @@ import type { EscalationRow, TicketRow } from "@/db/schema";
 import { buildTicketTag } from "@/lib/subject";
 import { formatDate } from "@/lib/format";
 import { answerEscalation } from "@/app/actions/escalations";
+import { type ActionResult } from "@/lib/actionResult";
+import { ActionForm } from "@/app/components/ActionForm";
 
 export const dynamic = "force-dynamic";
 
@@ -66,11 +68,11 @@ function loadEscalations(): EscalationView[] {
   });
 }
 
-async function submitAnswer(formData: FormData): Promise<void> {
+async function submitAnswer(formData: FormData): Promise<ActionResult> {
   "use server";
   const escalationId = Number(formData.get("escalationId"));
   const answer = String(formData.get("answer") ?? "");
-  await answerEscalation(escalationId, answer);
+  return answerEscalation(escalationId, answer);
 }
 
 export default function EskalationenPage() {
@@ -113,7 +115,7 @@ export default function EskalationenPage() {
               )}
             </div>
             <p className="mb-3 font-medium">{escalation.question}</p>
-            <form action={submitAnswer} className="space-y-2">
+            <ActionForm action={submitAnswer} className="space-y-2">
               <input
                 type="hidden"
                 name="escalationId"
@@ -132,7 +134,7 @@ export default function EskalationenPage() {
               >
                 Antwort senden
               </button>
-            </form>
+            </ActionForm>
             <p className="mt-2 text-xs text-gray-400">
               Erstellt: {formatDate(escalation.createdAt)}
             </p>

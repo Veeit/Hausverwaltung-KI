@@ -66,10 +66,10 @@ describe("uploadDocument", () => {
     expect(hits[0].filename).toBe("haus.txt");
   });
 
-  it("wirft eine deutsche Fehlermeldung, wenn keine Datei übergeben wurde", async () => {
-    await expect(uploadDocument(new FormData())).rejects.toThrow(
-      "Bitte eine Datei auswählen.",
-    );
+  it("liefert eine deutsche Fehlermeldung als Rückgabewert, wenn keine Datei übergeben wurde", async () => {
+    const result = await uploadDocument(new FormData());
+
+    expect(result.error).toContain("Bitte eine Datei auswählen.");
     expect(db.select().from(documents).all()).toHaveLength(0);
   });
 
@@ -95,7 +95,7 @@ describe("uploadDocument", () => {
   // der KI-Agent als Faktenquelle durchsucht (Nachweis: Suche nach "JFIF" fand
   // einen Treffer). uploadDocument muss solche Dateitypen ablehnen, BEVOR sie
   // addDocument()/dem Index erreichen.
-  it("lehnt einen nicht unterstützten Dateityp (PNG) ab und indiziert nichts", async () => {
+  it("lehnt einen nicht unterstützten Dateityp (PNG) mit einer deutschen Fehlermeldung als Rückgabewert ab und indiziert nichts", async () => {
     const pngBytes = Buffer.from([
       0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01,
     ]); // JFIF-Signatur
@@ -103,10 +103,9 @@ describe("uploadDocument", () => {
     const formData = new FormData();
     formData.set("file", file);
 
-    await expect(uploadDocument(formData)).rejects.toThrow(
-      /PDF.*TXT.*Markdown|Nicht unterstützter Dateityp/,
-    );
+    const result = await uploadDocument(formData);
 
+    expect(result.error).toMatch(/PDF.*TXT.*Markdown|Nicht unterstützter Dateityp/);
     expect(db.select().from(documents).all()).toHaveLength(0);
     expect(searchDocuments("JFIF")).toEqual([]);
   });
@@ -116,14 +115,15 @@ describe("uploadDocument", () => {
   // selbst mit einer eigenen, deutschen Meldung, damit ein zu großer Upload
   // nicht an der harten Framework-Grenze mit einer rohen, englischen
   // Fehlermeldung scheitert.
-  it("lehnt eine Datei über dem Größenlimit mit einer deutschen Meldung ab", async () => {
+  it("lehnt eine Datei über dem Größenlimit mit einer deutschen Meldung als Rückgabewert ab", async () => {
     const oversized = Buffer.alloc(8 * 1024 * 1024 + 1, "a");
     const file = new File([oversized], "riesige-hausordnung.txt", { type: "text/plain" });
     const formData = new FormData();
     formData.set("file", file);
 
-    await expect(uploadDocument(formData)).rejects.toThrow(/zu groß/);
+    const result = await uploadDocument(formData);
 
+    expect(result.error).toMatch(/zu groß/);
     expect(db.select().from(documents).all()).toHaveLength(0);
   });
 
@@ -133,8 +133,9 @@ describe("uploadDocument", () => {
     const formData = new FormData();
     formData.set("file", file);
 
-    await uploadDocument(formData);
+    const result = await uploadDocument(formData);
 
+    expect(result.error).toBeNull();
     expect(db.select().from(documents).all()).toHaveLength(1);
   });
 });

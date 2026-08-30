@@ -162,24 +162,28 @@ describe("approveApproval", () => {
     expect(outbound[0].processingStatus).toBe("done");
   });
 
-  it("wirft, wenn der Antrag bereits entschieden ist, und sendet nichts", async () => {
+  it("liefert einen Fehler als Rückgabewert, wenn der Antrag bereits entschieden ist, und sendet nichts", async () => {
     const { ticket, approval } = seed();
     db.update(approvals)
       .set({ status: "genehmigt", decidedAt: new Date().toISOString() })
       .where(eq(approvals.id, approval.id))
       .run();
 
-    await expect(approveApproval(approval.id)).rejects.toThrow();
+    const result = await approveApproval(approval.id);
+
+    expect(result.error).toBeTruthy();
     expect(sendSmtp).not.toHaveBeenCalled();
 
     const unchanged = db.select().from(tickets).where(eq(tickets.id, ticket.id)).get();
     expect(unchanged?.status).toBe("wartet_auf_genehmigung");
   });
 
-  it("wirft, wenn das Ticket weder wartet_auf_genehmigung noch genehmigt ist, und sendet nichts", async () => {
+  it("liefert einen Fehler als Rückgabewert, wenn das Ticket weder wartet_auf_genehmigung noch genehmigt ist, und sendet nichts", async () => {
     const { ticket, approval } = seed("infosammlung");
 
-    await expect(approveApproval(approval.id)).rejects.toThrow();
+    const result = await approveApproval(approval.id);
+
+    expect(result.error).toBeTruthy();
     expect(sendSmtp).not.toHaveBeenCalled();
 
     const unchanged = db.select().from(tickets).where(eq(tickets.id, ticket.id)).get();
@@ -268,18 +272,21 @@ describe("approveApproval", () => {
       () => new Promise((resolve) => setTimeout(resolve, 30)),
     );
 
-    const results = await Promise.allSettled([
+    // approveApproval wirft für diesen (erwartbaren) Konfliktfall nicht mehr —
+    // beide Aufrufe lösen sich auf, aber nur einer ohne Fehler (siehe
+    // src/lib/actionResult.ts).
+    const results = await Promise.all([
       approveApproval(approval.id),
       approveApproval(approval.id),
     ]);
 
     expect(sendSmtp).toHaveBeenCalledTimes(1);
 
-    const fulfilled = results.filter((r) => r.status === "fulfilled");
-    const rejected = results.filter((r) => r.status === "rejected") as PromiseRejectedResult[];
-    expect(fulfilled).toHaveLength(1);
-    expect(rejected).toHaveLength(1);
-    expect(String(rejected[0].reason?.message)).toMatch(/bereits/);
+    const succeeded = results.filter((r) => r.error === null);
+    const failed = results.filter((r) => r.error !== null);
+    expect(succeeded).toHaveLength(1);
+    expect(failed).toHaveLength(1);
+    expect(failed[0]!.error).toMatch(/bereits/);
 
     const finalTicket = db.select().from(tickets).where(eq(tickets.id, ticket.id)).get();
     expect(finalTicket?.status).toBe("handwerker_angefragt");
@@ -336,14 +343,16 @@ describe("rejectApproval", () => {
     expect(sendSmtp).not.toHaveBeenCalled();
   });
 
-  it("wirft, wenn der Antrag bereits entschieden ist", async () => {
+  it("liefert einen Fehler als Rückgabewert, wenn der Antrag bereits entschieden ist", async () => {
     const { approval } = seed();
     db.update(approvals)
       .set({ status: "abgelehnt", decidedAt: new Date().toISOString() })
       .where(eq(approvals.id, approval.id))
       .run();
 
-    await expect(rejectApproval(approval.id, "Egal")).rejects.toThrow();
+    const result = await rejectApproval(approval.id, "Egal");
+
+    expect(result.error).toBeTruthy();
   });
 
   // Review-Befund Punkt 4: Stellt die KI während der Wartezeit eine Rückfrage
@@ -381,9 +390,12 @@ describe("rejectApproval", () => {
     const { conv, ticket, approval } = seed();
     transitionTicket(ticket.id, "genehmigt");
 
-    await expect(
-      rejectApproval(approval.id, "Zu teuer, bitte erst einen Kostenvoranschlag einholen"),
-    ).rejects.toThrow();
+    const result = await rejectApproval(
+      approval.id,
+      "Zu teuer, bitte erst einen Kostenvoranschlag einholen",
+    );
+
+    expect(result.error).toBeTruthy();
 
     // Der Antrag darf NICHT unwiderruflich auf "abgelehnt" stehen bleiben —
     // sonst verschwindet er aus /genehmigungen, ein erneuter Versuch ist
@@ -423,15 +435,15 @@ describe("updateApprovalDraft", () => {
     expect(updated?.status).toBe("offen");
   });
 
-  it("wirft bei bereits entschiedenem Antrag", async () => {
+  it("liefert einen Fehler als Rückgabewert bei bereits entschiedenem Antrag", async () => {
     const { approval } = seed();
     db.update(approvals)
       .set({ status: "genehmigt", decidedAt: new Date().toISOString() })
       .where(eq(approvals.id, approval.id))
       .run();
 
-    await expect(
-      updateApprovalDraft(approval.id, "Neuer Betreff", "Neuer Mail-Text"),
-    ).rejects.toThrow();
+    const result = await updateApprovalDraft(approval.id, "Neuer Betreff", "Neuer Mail-Text");
+
+    expect(result.error).toBeTruthy();
   });
 });

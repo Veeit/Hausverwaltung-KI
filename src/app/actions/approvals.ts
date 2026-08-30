@@ -4,23 +4,29 @@ import { revalidatePath } from "next/cache";
 import { and, eq } from "drizzle-orm";
 import { getEnv } from "@/env";
 import { getDb } from "@/db/client";
-import { approvals, contractors, messages, tickets } from "@/db/schema";
+import { approvals, contractors, messages, tickets, type ApprovalRow } from "@/db/schema";
 import { transitionTicket } from "@/lib/tickets";
 import { buildTicketTag, ensureTag } from "@/lib/subject";
 import { findOrCreateConversation } from "@/lib/conversations";
 import { sendAndLogEmail } from "@/lib/outbound";
+import { OK, fail, type ActionResult } from "@/lib/actionResult";
 import { requireAuth } from "./auth";
 
-function loadOpenApproval(approvalId: number) {
+// ok:true/false als expliziter Diskriminant (siehe src/app/actions/masterdata.ts
+// für die ausführliche Begründung): Ein rein optionales "error"-Feld engt
+// TypeScript nach `if (lookup.error)` nicht zuverlässig ein.
+type ApprovalLookup = { ok: true; approval: ApprovalRow } | { ok: false; error: string };
+
+function loadOpenApproval(approvalId: number): ApprovalLookup {
   const db = getDb();
   const approval = db.select().from(approvals).where(eq(approvals.id, approvalId)).get();
   if (!approval) {
-    throw new Error(`Genehmigungsantrag ${approvalId} nicht gefunden.`);
+    return { ok: false, error: `Genehmigungsantrag ${approvalId} nicht gefunden.` };
   }
   if (approval.status !== "offen") {
-    throw new Error(`Genehmigungsantrag ${approvalId} ist bereits entschieden.`);
+    return { ok: false, error: `Genehmigungsantrag ${approvalId} ist bereits entschieden.` };
   }
-  return approval;
+  return { ok: true, approval };
 }
 
 function revalidateApprovalPages(ticketId: number): void {
@@ -30,14 +36,16 @@ function revalidateApprovalPages(ticketId: number): void {
   revalidatePath("/");
 }
 
-export async function approveApproval(approvalId: number): Promise<void> {
+export async function approveApproval(approvalId: number): Promise<ActionResult> {
   await requireAuth();
   const db = getDb();
 
-  const approval = loadOpenApproval(approvalId);
+  const lookup = loadOpenApproval(approvalId);
+  if (!lookup.ok) return fail(lookup.error);
+  const { approval } = lookup;
   const ticket = db.select().from(tickets).where(eq(tickets.id, approval.ticketId)).get();
   if (!ticket) {
-    throw new Error(`Ticket ${approval.ticketId} nicht gefunden.`);
+    return fail(`Ticket ${approval.ticketId} nicht gefunden.`);
   }
   // "genehmigt" ist hier ebenfalls ein gültiger Startzustand, damit die Aktion
   // WIEDERHOLBAR ist: Schlägt der SMTP-Versand unten fehl, steht das Ticket
@@ -54,7 +62,7 @@ export async function approveApproval(approvalId: number): Promise<void> {
     ticket.status !== "genehmigt" &&
     ticket.status !== "eskaliert"
   ) {
-    throw new Error(
+    return fail(
       `Ticket ${ticket.id} ist weder im Status "wartet_auf_genehmigung" noch "genehmigt" noch "eskaliert" (aktuell: "${ticket.status}").`,
     );
   }
@@ -64,7 +72,7 @@ export async function approveApproval(approvalId: number): Promise<void> {
     .where(eq(contractors.id, approval.contractorId))
     .get();
   if (!contractor) {
-    throw new Error(`Handwerker ${approval.contractorId} nicht gefunden.`);
+    return fail(`Handwerker ${approval.contractorId} nicht gefunden.`);
   }
 
   // Anspruch atomar sichern, BEVOR irgendetwas anderes passiert (Ticket-
@@ -83,7 +91,7 @@ export async function approveApproval(approvalId: number): Promise<void> {
     .where(and(eq(approvals.id, approval.id), eq(approvals.status, "offen")))
     .run();
   if (claim.changes === 0) {
-    throw new Error(
+    return fail(
       `Genehmigungsantrag ${approvalId} wurde soeben bereits in einem anderen Vorgang entschieden. Bitte die Seite neu laden.`,
     );
   }
@@ -122,10 +130,12 @@ export async function approveApproval(approvalId: number): Promise<void> {
     transitionTicket(ticket.id, "handwerker_angefragt");
   } catch (err) {
     // Wiederholbarkeit erhalten: Der Anspruch oben ist bereits gesichert,
-    // aber danach ist etwas schiefgegangen (typischerweise der SMTP-Versand).
-    // Antrag zurück auf "offen", damit ein erneuter Klick den Vorgang zu Ende
-    // bringen kann, statt dauerhaft in einem Zwischenzustand hängen zu
-    // bleiben ("genehmigt", aber ohne dass je eine Mail rausging).
+    // aber danach ist etwas schiefgegangen (typischerweise der SMTP-Versand —
+    // ein unerwarteter Fehler, der auf der globalen Error-Boundary landen
+    // soll, siehe src/app/error.tsx). Antrag zurück auf "offen", damit ein
+    // erneuter Klick den Vorgang zu Ende bringen kann, statt dauerhaft in
+    // einem Zwischenzustand hängen zu bleiben ("genehmigt", aber ohne dass je
+    // eine Mail rausging).
     // Bekannte Einschränkung (für den PoC hinnehmbar): Stürzt der Prozess
     // exakt zwischen erfolgreichem Mailversand und diesem catch-Block ab,
     // bleibt der Antrag auf "genehmigt" stehen, obwohl der weitere
@@ -138,16 +148,19 @@ export async function approveApproval(approvalId: number): Promise<void> {
   }
 
   revalidateApprovalPages(ticket.id);
+  return OK;
 }
 
-export async function rejectApproval(approvalId: number, note: string): Promise<void> {
+export async function rejectApproval(approvalId: number, note: string): Promise<ActionResult> {
   await requireAuth();
   const db = getDb();
 
-  const approval = loadOpenApproval(approvalId);
+  const lookup = loadOpenApproval(approvalId);
+  if (!lookup.ok) return fail(lookup.error);
+  const { approval } = lookup;
   const ticket = db.select().from(tickets).where(eq(tickets.id, approval.ticketId)).get();
   if (!ticket) {
-    throw new Error(`Ticket ${approval.ticketId} nicht gefunden.`);
+    return fail(`Ticket ${approval.ticketId} nicht gefunden.`);
   }
   // Spiegelbild des Guards in approveApproval: Der Ticket-Status wird VOR
   // jedem Schreibzugriff geprüft. "abgelehnt" ist laut TICKET_TRANSITIONS aus
@@ -160,7 +173,7 @@ export async function rejectApproval(approvalId: number, note: string): Promise<
   // bliebe der Antrag unwiderruflich auf "abgelehnt" stehen, ohne dass der
   // Mieter je über die synthetische Nachricht informiert wird.
   if (ticket.status !== "wartet_auf_genehmigung" && ticket.status !== "eskaliert") {
-    throw new Error(
+    return fail(
       `Ticket ${ticket.id} ist nicht mehr im Status "wartet_auf_genehmigung" oder "eskaliert" ` +
         `(aktuell: "${ticket.status}") und kann daher nicht abgelehnt werden. Der Antrag bleibt offen ` +
         `— bitte Ticket ${buildTicketTag(ticket.id)} zunächst dort prüfen und die Ablehnung danach erneut versuchen.`,
@@ -198,17 +211,20 @@ export async function rejectApproval(approvalId: number, note: string): Promise<
     .run();
 
   revalidateApprovalPages(ticket.id);
+  return OK;
 }
 
 export async function updateApprovalDraft(
   approvalId: number,
   emailSubject: string,
   emailBody: string,
-): Promise<void> {
+): Promise<ActionResult> {
   await requireAuth();
   const db = getDb();
 
-  const approval = loadOpenApproval(approvalId);
+  const lookup = loadOpenApproval(approvalId);
+  if (!lookup.ok) return fail(lookup.error);
+  const { approval } = lookup;
 
   db.update(approvals)
     .set({ emailSubject, emailBody })
@@ -216,4 +232,5 @@ export async function updateApprovalDraft(
     .run();
 
   revalidatePath("/genehmigungen");
+  return OK;
 }

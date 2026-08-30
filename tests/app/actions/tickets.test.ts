@@ -104,13 +104,12 @@ describe("setTicketStatus", () => {
     expect(updated?.status).toBe("erledigt");
   });
 
-  it("wirft bei unbekanntem Statuswert eine deutsche Fehlermeldung und lässt das Ticket unverändert", async () => {
+  it("liefert bei unbekanntem Statuswert eine deutsche Fehlermeldung als Rückgabewert und lässt das Ticket unverändert", async () => {
     const { ticket } = seed("neu");
 
-    await expect(
-      setTicketStatus(ticket.id, "voellig_unbekannter_status" as TicketStatus),
-    ).rejects.toThrow(/[Uu]nbekannt.*voellig_unbekannter_status/);
+    const result = await setTicketStatus(ticket.id, "voellig_unbekannter_status" as TicketStatus);
 
+    expect(result.error).toMatch(/[Uu]nbekannt.*voellig_unbekannter_status/);
     const unchanged = db.select().from(tickets).where(eq(tickets.id, ticket.id)).get();
     expect(unchanged?.status).toBe("neu");
   });
@@ -143,14 +142,19 @@ describe("sendManualReply", () => {
     expect(logged[0].processingStatus).toBe("done");
   });
 
-  it("wirft bei unbekanntem Ticket", async () => {
-    await expect(sendManualReply(999, "Hallo")).rejects.toThrow();
+  it("liefert bei unbekanntem Ticket eine Fehlermeldung als Rückgabewert und sendet nichts", async () => {
+    const result = await sendManualReply(999, "Hallo");
+
+    expect(result.error).toBeTruthy();
     expect(sendSmtp).not.toHaveBeenCalled();
   });
 
-  it("wirft bei leerem Text und sendet nichts", async () => {
+  it("liefert bei leerem Text eine deutsche Fehlermeldung als Rückgabewert und sendet nichts", async () => {
     const { ticket } = seed("infosammlung");
-    await expect(sendManualReply(ticket.id, "   ")).rejects.toThrow();
+
+    const result = await sendManualReply(ticket.id, "   ");
+
+    expect(result.error).toContain("darf nicht leer sein");
     expect(sendSmtp).not.toHaveBeenCalled();
   });
 });

@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { addDocument, deleteDocument } from "@/lib/documents";
 import { requireAuth } from "@/app/actions/auth";
+import { OK, fail, type ActionResult } from "@/lib/actionResult";
 
 // Nur Dateitypen zulassen, aus denen addDocument() sinnvollen Text extrahiert
 // (PDF via pdf-parse, alles andere über data.toString("utf8")). Ohne diese
@@ -53,31 +54,31 @@ function isAllowedDocumentType(filename: string, mimeType: string): boolean {
   return ALLOWED_MIME_TYPES.has(mimeType);
 }
 
-export async function uploadDocument(formData: FormData): Promise<void> {
+export async function uploadDocument(formData: FormData): Promise<ActionResult> {
   await requireAuth();
   const file = formData.get("file");
   if (!(file instanceof File) || file.size === 0) {
-    throw new Error("Bitte eine Datei auswählen.");
+    return fail("Bitte eine Datei auswählen.");
   }
   if (!isAllowedDocumentType(file.name, file.type)) {
-    throw new Error(
+    return fail(
       "Nicht unterstützter Dateityp. Erlaubt sind nur PDF, TXT und Markdown (.pdf, .txt, .md, .markdown).",
     );
   }
   if (file.size > MAX_DOCUMENT_SIZE_BYTES) {
     const maxMb = (MAX_DOCUMENT_SIZE_BYTES / (1024 * 1024)).toFixed(0);
     const fileMb = (file.size / (1024 * 1024)).toFixed(1);
-    throw new Error(
-      `Datei zu groß (${fileMb} MB). Erlaubt sind maximal ${maxMb} MB.`,
-    );
+    return fail(`Datei zu groß (${fileMb} MB). Erlaubt sind maximal ${maxMb} MB.`);
   }
   const data = Buffer.from(await file.arrayBuffer());
   await addDocument(file.name, file.type || "application/octet-stream", data);
   revalidatePath("/dokumente");
+  return OK;
 }
 
-export async function removeDocument(id: number): Promise<void> {
+export async function removeDocument(id: number): Promise<ActionResult> {
   await requireAuth();
   deleteDocument(id);
   revalidatePath("/dokumente");
+  return OK;
 }

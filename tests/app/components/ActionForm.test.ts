@@ -25,6 +25,29 @@ describe("toActionState", () => {
     expect(action).toHaveBeenCalledTimes(1);
   });
 
+  // Der Regelfall seit der Umstellung auf das Rückgabewert-Muster (siehe
+  // src/lib/actionResult.ts): Die Action WIRFT nicht, sondern gibt einen
+  // ActionResult-Wert zurück. Das muss direkt als neuer Zustand übernommen
+  // werden — anders als bei einem geworfenen Fehler kommt die Meldung so
+  // unverändert durch die Server-Action-Grenze, auch im Produktionsbuild.
+  it("übernimmt ein von der Action zurückgegebenes ActionResult direkt als Zustand, statt es abzufangen", async () => {
+    const action = vi.fn(async () => ({ error: "Diese E-Mail-Adresse ist bereits vergeben." }));
+    const wrapped = toActionState(action);
+
+    const result = await wrapped({ error: null }, new FormData());
+
+    expect(result).toEqual({ error: "Diese E-Mail-Adresse ist bereits vergeben." });
+  });
+
+  it("übernimmt ein erfolgreiches ActionResult ({ error: null }) als Zustand", async () => {
+    const action = vi.fn(async () => ({ error: null }));
+    const wrapped = toActionState(action);
+
+    const result = await wrapped({ error: null }, new FormData());
+
+    expect(result).toEqual({ error: null });
+  });
+
   it("fängt eine geworfene Fehlermeldung ab und liefert sie als Zustand statt zu werfen", async () => {
     const action = vi.fn(async () => {
       throw new Error("Diese E-Mail-Adresse ist bereits vergeben.");

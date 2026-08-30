@@ -126,6 +126,21 @@ describe("answerEscalation", () => {
     expect(esc?.answeredAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
+  it("liefert bei leerer Antwort eine deutsche Fehlermeldung als Rückgabewert und ändert nichts", async () => {
+    const { escalationId } = seedEscalationWithTicket();
+
+    const result = await answerEscalation(escalationId, "   ");
+
+    expect(result.error).toContain("darf nicht leer sein");
+    const esc = db
+      .select()
+      .from(escalations)
+      .where(eq(escalations.id, escalationId))
+      .get();
+    expect(esc?.status).toBe("offen");
+    expect(esc?.answer).toBeNull();
+  });
+
   it("legt synthetische Landlord-Message mit exaktem Body-Muster an", async () => {
     const { conversationId, ticketId, escalationId } = seedEscalationWithTicket();
 
@@ -186,13 +201,13 @@ describe("answerEscalation", () => {
     );
   });
 
-  it("wirft bei bereits beantworteter Eskalation und legt keine zweite Message an", async () => {
+  it("liefert bei bereits beantworteter Eskalation eine Fehlermeldung als Rückgabewert und legt keine zweite Message an", async () => {
     const { conversationId, escalationId } = seedEscalationWithTicket();
 
     await answerEscalation(escalationId, "Ja, bitte beauftragen.");
-    await expect(
-      answerEscalation(escalationId, "Doch lieber nicht."),
-    ).rejects.toThrow(/bereits beantwortet/);
+    const result = await answerEscalation(escalationId, "Doch lieber nicht.");
+
+    expect(result.error).toMatch(/bereits beantwortet/);
 
     const rows = db
       .select()

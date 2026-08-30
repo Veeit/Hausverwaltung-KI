@@ -9,32 +9,33 @@ import {
   rejectApproval,
   updateApprovalDraft,
 } from "@/app/actions/approvals";
+import { fail, type ActionResult } from "@/lib/actionResult";
 import { ActionForm } from "@/app/components/ActionForm";
 
 export const dynamic = "force-dynamic";
 
-async function saveDraftAction(formData: FormData): Promise<void> {
+async function saveDraftAction(formData: FormData): Promise<ActionResult> {
   "use server";
   const approvalId = Number(formData.get("approvalId"));
-  await updateApprovalDraft(
+  return updateApprovalDraft(
     approvalId,
     String(formData.get("emailSubject") ?? ""),
     String(formData.get("emailBody") ?? ""),
   );
 }
 
-async function approveAction(formData: FormData): Promise<void> {
+async function approveAction(formData: FormData): Promise<ActionResult> {
   "use server";
-  await approveApproval(Number(formData.get("approvalId")));
+  return approveApproval(Number(formData.get("approvalId")));
 }
 
-async function rejectAction(formData: FormData): Promise<void> {
+async function rejectAction(formData: FormData): Promise<ActionResult> {
   "use server";
   const note = String(formData.get("note") ?? "").trim();
   if (!note) {
-    throw new Error("Bitte eine Begründung für die Ablehnung angeben.");
+    return fail("Bitte eine Begründung für die Ablehnung angeben.");
   }
-  await rejectApproval(Number(formData.get("approvalId")), note);
+  return rejectApproval(Number(formData.get("approvalId")), note);
 }
 
 export default function GenehmigungenPage() {

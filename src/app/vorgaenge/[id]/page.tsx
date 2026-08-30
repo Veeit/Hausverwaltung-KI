@@ -17,6 +17,8 @@ import { TICKET_STATUSES, type TicketStatus } from "@/lib/tickets";
 import { buildTicketTag } from "@/lib/subject";
 import { roleLabel, formatDate } from "@/lib/format";
 import { sendManualReply, setTicketStatus } from "@/app/actions/tickets";
+import { fail, type ActionResult } from "@/lib/actionResult";
+import { ActionForm } from "@/app/components/ActionForm";
 import StatusBadge from "@/app/components/StatusBadge";
 
 export const dynamic = "force-dynamic";
@@ -26,21 +28,21 @@ const DIRECTION_LABELS: Record<string, string> = {
   outbound: "ausgehend",
 };
 
-async function changeStatusAction(formData: FormData): Promise<void> {
+async function changeStatusAction(formData: FormData): Promise<ActionResult> {
   "use server";
   const ticketId = Number(formData.get("ticketId"));
   const raw = String(formData.get("status") ?? "");
   if (!(TICKET_STATUSES as readonly string[]).includes(raw)) {
-    throw new Error(`Unbekannter Status: ${raw}`);
+    return fail(`Unbekannter Status: ${raw}`);
   }
-  await setTicketStatus(ticketId, raw as TicketStatus);
+  return setTicketStatus(ticketId, raw as TicketStatus);
 }
 
-async function manualReplyAction(formData: FormData): Promise<void> {
+async function manualReplyAction(formData: FormData): Promise<ActionResult> {
   "use server";
   const ticketId = Number(formData.get("ticketId"));
   const text = String(formData.get("text") ?? "");
-  await sendManualReply(ticketId, text);
+  return sendManualReply(ticketId, text);
 }
 
 export default async function VorgangDetailPage({
@@ -181,7 +183,7 @@ export default async function VorgangDetailPage({
 
       <section className="border border-gray-200 rounded p-4">
         <h2 className="text-lg font-semibold mb-3">Manuelle Aktionen</h2>
-        <form action={changeStatusAction} className="flex items-center gap-2 mb-4">
+        <ActionForm action={changeStatusAction} className="flex items-center gap-2 mb-4">
           <input type="hidden" name="ticketId" value={ticket.id} />
           <label htmlFor="status" className="text-sm font-medium">
             Status setzen:
@@ -204,9 +206,9 @@ export default async function VorgangDetailPage({
           >
             Übernehmen
           </button>
-        </form>
+        </ActionForm>
 
-        <form action={manualReplyAction} className="space-y-2">
+        <ActionForm action={manualReplyAction} className="space-y-2">
           <input type="hidden" name="ticketId" value={ticket.id} />
           <label htmlFor="text" className="block text-sm font-medium">
             Selbst als Vermieter antworten (E-Mail an den Mieter):
@@ -225,7 +227,7 @@ export default async function VorgangDetailPage({
           >
             Antwort senden
           </button>
-        </form>
+        </ActionForm>
       </section>
 
       <section>
