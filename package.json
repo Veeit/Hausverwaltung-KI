@@ -1,0 +1,43 @@
+{
+  "name": "ki-hausverwaltung",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "worker": "tsx src/worker/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "seed": "tsx scripts/seed.ts",
+    "smoke": "tsx scripts/smoke.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.122.0",
+    "better-sqlite3": "^12.11.1",
+    "dotenv": "^17.4.2",
+    "drizzle-orm": "^0.45.2",
+    "imapflow": "^1.7.6",
+    "mailparser": "^3.9.17",
+    "next": "^15.5.24",
+    "nodemailer": "^9.0.6",
+    "pdf-parse": "^1.1.4",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "tsx": "^4.23.13",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/mailparser": "^3.4.6",
+    "@types/node": "^26.4.0",
+    "@types/nodemailer": "^8.0.1",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.5",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
+  }
+}
