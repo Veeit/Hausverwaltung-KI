@@ -4,9 +4,11 @@
 
 **Goal:** Ein PoC, bei dem Mieter per E-Mail Anfragen stellen, ein KI-Agent (Claude Opus 5) den Support-Dialog führt, Reparaturen als Genehmigungsanträge fürs Vermieter-Dashboard aufbereitet und nach Genehmigung per Klick Handwerker per E-Mail beauftragt.
 
-**Architecture:** Monolith in einem Repo: Next.js 15 (Dashboard + Server Actions) und ein separater Worker-Prozess (IMAP-Polling → KI-Agent → SMTP) teilen sich SQLite (Drizzle, synchrone Queries) und die gesamte Domänenlogik unter `src/`. Der Agent läuft über den SDK-Tool-Runner mit fünf Tools; alle ausgehenden Mails erzwingen Whitelist + Rate-Limit, Handwerker-Kontakt nur nach Genehmigung.
+**Architecture:** Monolith in einem Repo: Next.js 16 (Dashboard + Server Actions) und ein separater Worker-Prozess (IMAP-Polling → KI-Agent → SMTP) teilen sich SQLite (Drizzle, synchrone Queries) und die gesamte Domänenlogik unter `src/`. Der Agent läuft über den SDK-Tool-Runner mit fünf Tools; alle ausgehenden Mails erzwingen Whitelist + Rate-Limit, Handwerker-Kontakt nur nach Genehmigung.
 
-**Tech Stack:** TypeScript (strict, ESM), Next.js ^15, React ^19, Tailwind 4, better-sqlite3 + drizzle-orm (ohne drizzle-kit; handschriftliche DDL), @anthropic-ai/sdk (`claude-opus-5`, `betaZodTool` + `toolRunner`), imapflow, mailparser, nodemailer, pdf-parse, SQLite FTS5, vitest, tsx.
+**Tech Stack:** TypeScript (strict, ESM), Next.js ^16, React ^19, Tailwind 4, better-sqlite3 + drizzle-orm (ohne drizzle-kit; handschriftliche DDL), @anthropic-ai/sdk (`claude-opus-5`, `betaZodTool` + `toolRunner`), imapflow, mailparser, nodemailer, pdf-parse, SQLite FTS5, vitest, tsx.
+
+> **Nachtrag (2026-08-30):** Ursprünglich mit Next.js `^15` geplant und umgesetzt. Ein `npm audit fix --force` des Auftraggebers hat Next.js unerwartet auf `^16.3.3` angehoben; die 15er-Linie hatte zwei Schwachstellen in Unterabhängigkeiten, für die es keinen Fix innerhalb der 15er-Linie gab, `npm audit` meldet unter 16 null Schwachstellen. Im Zuge dessen wurde auch die veraltete `middleware`-Dateikonvention auf `proxy` migriert (`src/proxy.ts` statt `src/middleware.ts`, `tests/proxy.test.ts` statt `tests/middleware.test.ts`). Alle 311 Tests, `tsc --noEmit` und `npm run build` bleiben grün; die Zugriffskontrolle wurde erneut gegen einen echten Produktionsserver verifiziert. Details: `.superpowers/sdd/next16-report.md`. Die Tasks unten beschreiben weiterhin den historischen Stand zum Zeitpunkt der Umsetzung (Next 15, `middleware.ts`), mit Ausnahme der unten direkt aktualisierten Versions- und Dateinamen-Verweise.
 
 **Spec:** `docs/superpowers/specs/2026-08-29-ki-hausverwaltung-mvp-design.md`
 **Verbindliche Schnittstellen-Verträge:** Alle Signaturen, Tabellen und Konventionen unten in den Tasks entstammen dem Vertragsdokument des Plans; bei Abweichungen im Wortlaut gilt: Schema/Signaturen aus Task 2–10 sind verbindlich für alle späteren Tasks.
@@ -14,7 +16,8 @@
 ## Global Constraints
 
 - Node >= 20, npm; TypeScript `strict: true`; ESM (`"type": "module"`).
-- Next.js `^15` (App Router, `src/`-Verzeichnis), React `^19`, Tailwind `^4` via `@tailwindcss/postcss`.
+- Next.js `^16` (App Router, `src/`-Verzeichnis; ursprünglich `^15`, siehe Nachtrag oben), React `^19`, Tailwind `^4` via `@tailwindcss/postcss`.
+- **Datei-Konvention:** Der Zugriffsschutz liegt in `src/proxy.ts` (Export `proxy`, Test `tests/proxy.test.ts`) — Next.js 16 hat die frühere `middleware`-Konvention (`src/middleware.ts`, Export `middleware`) als deprecated markiert und durch `proxy` ersetzt.
 - DB: better-sqlite3 ^12 + drizzle-orm, **synchrone** Queries (`.all()`/`.get()`/`.run()`); kein drizzle-kit — DDL idempotent in `src/db/ddl.ts`, ausgeführt von `createDb()`.
 - KI: Modell **`claude-opus-5`**, `max_tokens: 16000`; Tool Runner `client.beta.messages.toolRunner` mit `betaZodTool` aus `@anthropic-ai/sdk/helpers/beta/zod`; Refusal-Fallback `betas: ["server-side-fallback-2026-06-01"]`, `fallbacks: [{ model: "claude-opus-4-8" }]`; `max_iterations: 16`.
 - **Adaptives Thinking** (Spec §6) wird durch **Weglassen** des `thinking`-Parameters erreicht: Auf Claude Opus 5 ist Thinking standardmäßig aktiv, ein fehlender Parameter entspricht exakt `{ type: "adaptive" }`. Den Parameter also **nicht** setzen — `{ type: "enabled", budget_tokens: N }` würde auf diesem Modell mit HTTP 400 abgelehnt.
@@ -54,7 +57,7 @@
 
 ### Task 1: Projekt-Scaffolding
 
-**Ziel:** Aus dem leeren Verzeichnis wird ein lauffähiges Next.js-15-Projekt mit TypeScript (`strict`), Tailwind CSS 4, Vitest und allen Laufzeit-Dependencies — plus die typisierte Env-Konfiguration `getEnv()` (test-first). Am Ende dieses Tasks laufen `npm run build` und `npm test` grün, und es liegen drei Commits vor.
+**Ziel:** Aus dem leeren Verzeichnis wird ein lauffähiges Next.js-16-Projekt (ursprünglich Next.js 15, siehe Nachtrag oben) mit TypeScript (`strict`), Tailwind CSS 4, Vitest und allen Laufzeit-Dependencies — plus die typisierte Env-Konfiguration `getEnv()` (test-first). Am Ende dieses Tasks laufen `npm run build` und `npm test` grün, und es liegen drei Commits vor.
 
 **Wichtige Hinweise vorab:**
 
@@ -138,7 +141,7 @@
   Hinweis: Dieser Schritt kann mehrere Minuten dauern — `better-sqlite3` baut ein natives Modul.
 
   ```bash
-  npm install "next@^15" "react@^19" "react-dom@^19" @anthropic-ai/sdk "zod@^3.25" drizzle-orm "better-sqlite3@^12" imapflow mailparser nodemailer "pdf-parse@^1.1.1" dotenv
+  npm install "next@^16" "react@^19" "react-dom@^19" @anthropic-ai/sdk "zod@^3.25" drizzle-orm "better-sqlite3@^12" imapflow mailparser nodemailer "pdf-parse@^1.1.1" dotenv
   ```
 
   Expected: Exit-Code 0, Ausgabe `added … packages`. Warnungen über `deprecated`-Pakete sind unkritisch; Fehler beim nativen Build von `better-sqlite3` sind es nicht (dann Xcode Command Line Tools installieren und wiederholen, siehe Hinweise oben).
@@ -153,7 +156,7 @@
 
   Expected: Exit-Code 0, Ausgabe `added … packages`.
 
-  **Warum `typescript@^5` gepinnt ist:** Ohne Pin installiert npm TypeScript 7.x, das Next.js 15 hart ablehnt — `next build` bricht dann schon beim Laden von `next.config.ts` ab (`TypeError: Cannot read properties of undefined (reading 'fileExists')`). Mit TypeScript 6 scheitert stattdessen der Typecheck an `src/app/layout.tsx`, weil TS 6 Side-Effect-Importe untypisierter Module (`./globals.css`) verbietet. Nur die 5er-Linie baut grün — und alle Build-Gates dieses Plans (Tasks 1, 10, 11, 12, 13, 14, 15, 16, 17) hängen daran.
+  **Warum `typescript@^5` gepinnt ist:** Ohne Pin installiert npm TypeScript 7.x, das Next.js 15 hart ablehnt — `next build` bricht dann schon beim Laden von `next.config.ts` ab (`TypeError: Cannot read properties of undefined (reading 'fileExists')`). Mit TypeScript 6 scheitert stattdessen der Typecheck an `src/app/layout.tsx`, weil TS 6 Side-Effect-Importe untypisierter Module (`./globals.css`) verbietet. Nur die 5er-Linie baut grün — und alle Build-Gates dieses Plans (Tasks 1, 10, 11, 12, 13, 14, 15, 16, 17) hängen daran. (Beobachtet unter Next 15; das spätere Next-16-Upgrade, siehe Nachtrag oben, hat `typescript@^5.9.3` unverändert gelassen und wurde gegen genau diesen Pin verifiziert, ohne TS 6/7 erneut zu prüfen.)
 
   **Warum `@types/react` und `@types/react-dom` mitinstalliert werden:** Next 15 führt sie als Pflichtpakete. Fehlen sie, installiert `next build` sie selbst nach und verändert dabei `package.json` und `package-lock.json` — die Änderung würde nie committet und Task 17 Step 9 (`git status` → sauberer Arbeitsbaum) schlüge fehl.
 
@@ -161,7 +164,7 @@
 
   Run: `cat package.json`
 
-  Expected — alle folgenden Punkte müssen zutreffen (npm schreibt konkrete Versionen mit Caret, z.B. `"next": "^15.5.4"`; Minor/Patch dürfen neuer sein, die **Major-Versionen MÜSSEN stimmen**):
+  Expected — alle folgenden Punkte müssen zutreffen (npm schreibt konkrete Versionen mit Caret, z.B. `"next": "^16.3.3"`; Minor/Patch dürfen neuer sein, die **Major-Versionen MÜSSEN stimmen** — Next.js wurde nachträglich von ^15 auf ^16 aktualisiert, siehe Nachtrag oben):
 
   - `"private": true` und `"type": "module"` sind gesetzt.
   - `"scripts"` exakt:
@@ -179,7 +182,7 @@
     }
     ```
 
-  - `"dependencies"` enthält genau diese 12 Pakete: `next` (^15), `react` (^19), `react-dom` (^19), `@anthropic-ai/sdk`, `zod` (^3.25), `drizzle-orm`, `better-sqlite3` (^12), `imapflow`, `mailparser`, `nodemailer`, `pdf-parse` (**^1**, nicht 2.x), `dotenv`.
+  - `"dependencies"` enthält genau diese 12 Pakete: `next` (^16, ursprünglich ^15), `react` (^19), `react-dom` (^19), `@anthropic-ai/sdk`, `zod` (^3.25), `drizzle-orm`, `better-sqlite3` (^12), `imapflow`, `mailparser`, `nodemailer`, `pdf-parse` (**^1**, nicht 2.x), `dotenv`.
   - `"devDependencies"` enthält genau diese 11 Pakete: `typescript` (**^5**, nicht 6.x oder 7.x), `@types/node`, `@types/react`, `@types/react-dom`, `@types/better-sqlite3`, `@types/mailparser`, `@types/nodemailer`, `tsx`, `vitest` (^3), `tailwindcss` (^4), `@tailwindcss/postcss` (^4).
 
 - [ ] **Step 7: Commit**
@@ -382,7 +385,7 @@
 
   ## Stack
 
-  - Next.js 15 (App Router, `src/`-Layout) + separater Worker-Prozess (IMAP-Polling)
+  - Next.js 16 (App Router, `src/`-Layout) + separater Worker-Prozess (IMAP-Polling)
   - SQLite über better-sqlite3 + Drizzle ORM, FTS5-Volltextsuche
   - Anthropic TypeScript SDK, Modell `claude-opus-5`
   - Tailwind CSS 4, Vitest
@@ -6985,7 +6988,7 @@ Auth (Passwort-Login mit Cookie), Middleware-Schutz, Navigation mit Badge-Zähle
 
 **Files:**
 - Create: `src/lib/auth.ts`
-- Create: `src/middleware.ts`
+- Create: `src/proxy.ts` (zum Zeitpunkt der Umsetzung `src/middleware.ts`, seit dem Next-16-Upgrade umbenannt, siehe Nachtrag oben)
 - Create: `src/app/actions/auth.ts`
 - Create: `src/app/actions/worker.ts`
 - Create: `src/app/login/page.tsx`
@@ -6994,7 +6997,7 @@ Auth (Passwort-Login mit Cookie), Middleware-Schutz, Navigation mit Badge-Zähle
 - Modify: `src/app/layout.tsx` (Platzhalter aus Task 1 vollständig ersetzen)
 - Modify: `src/app/page.tsx` (Platzhalter aus Task 1 vollständig ersetzen)
 - Test: `tests/lib/auth.test.ts`
-- Test: `tests/middleware.test.ts`
+- Test: `tests/proxy.test.ts` (zum Zeitpunkt der Umsetzung `tests/middleware.test.ts`)
 
 **Interfaces:**
 - Consumes:
@@ -7131,13 +7134,13 @@ Hinweis zur Teststrategie: Unit-getestet werden nur die Auth-Helfer (`sha256Hex`
 
 - [ ] **Step 6: Middleware implementieren**
 
-  Datei `src/middleware.ts` anlegen (das Projekt nutzt das `src`-Verzeichnis, Next.js erwartet die Middleware genau dort — NICHT im Projekt-Root und NICHT unter `src/app/`). Sie schützt alle Routen außer `/login`, `/_next` und `/favicon.ico`: Das Cookie `hv_auth` muss dem erwarteten Wert aus `getExpectedAuthCookie()` entsprechen, sonst Redirect auf `/login`. Fail-closed: Liefert `getExpectedAuthCookie` `null` (kein brauchbares Passwort konfiguriert), kann KEIN Cookie-Wert jemals passen — der Vergleich `expected !== null && cookieValue === expected` schließt den Zugriff dann unabhängig vom mitgeschickten Cookie aus:
+  Datei `src/proxy.ts` anlegen (zum Zeitpunkt der Umsetzung `src/middleware.ts` — Next.js hat die Konvention inzwischen auf `proxy` umbenannt, siehe Nachtrag oben; das Projekt nutzt das `src`-Verzeichnis, Next.js erwartet die Datei genau dort — NICHT im Projekt-Root und NICHT unter `src/app/`). Sie schützt alle Routen außer `/login`, `/_next` und `/favicon.ico`: Das Cookie `hv_auth` muss dem erwarteten Wert aus `getExpectedAuthCookie()` entsprechen, sonst Redirect auf `/login`. Fail-closed: Liefert `getExpectedAuthCookie` `null` (kein brauchbares Passwort konfiguriert), kann KEIN Cookie-Wert jemals passen — der Vergleich `expected !== null && cookieValue === expected` schließt den Zugriff dann unabhängig vom mitgeschickten Cookie aus:
 
   ```ts
   import { NextResponse, type NextRequest } from "next/server";
   import { AUTH_COOKIE, getExpectedAuthCookie } from "@/lib/auth";
 
-  export async function middleware(request: NextRequest): Promise<NextResponse> {
+  export async function proxy(request: NextRequest): Promise<NextResponse> {
     // fail-closed: Ist kein brauchbares Passwort konfiguriert, liefert
     // getExpectedAuthCookie `null` statt sha256(""). Damit kann kein Cookie-Wert
     // jemals passen, egal was der Client mitschickt.
@@ -7155,22 +7158,24 @@ Hinweis zur Teststrategie: Unit-getestet werden nur die Auth-Helfer (`sha256Hex`
     // Framework-Assets. Ein einfaches `login|_next|favicon.ico` im negativen
     // Lookahead würde dagegen jeden mit "login" BEGINNENDEN Pfad ausschließen
     // (z.B. "/loginXYZ", "/login-admin") — solche Pfade würden dann NIE von
-    // der Middleware geprüft und wären ungeschützt erreichbar.
+    // diesem Proxy geprüft und wären ungeschützt erreichbar.
     matcher: ["/((?!login$|_next(?:/|$)|favicon\\.ico$).*)"],
   };
   ```
 
-- [ ] **Step 6b: Dedizierten Middleware-Test für den fail-closed-Fall schreiben**
+  (Hinweis: Zum Zeitpunkt der Umsetzung hieß die Funktion `middleware` statt `proxy` — Next.js 15 kannte nur die `middleware`-Konvention. Seit dem Next-16-Upgrade heißt Datei und Export `proxy`, siehe Nachtrag oben.)
 
-  Die Auth-Helfer-Tests in `tests/lib/auth.test.ts` prüfen nur `getExpectedAuthCookie` isoliert. Dieser zusätzliche Test reproduziert den konkreten Angriffsfall auf Ebene der Middleware selbst — inklusive des historischen Befunds, dass der öffentlich bekannte Hash `sha256("")` bei leerem `DASHBOARD_PASSWORD` als gültiges Cookie akzeptiert wurde.
+- [ ] **Step 6b: Dedizierten Proxy-Test für den fail-closed-Fall schreiben**
 
-  Datei `tests/middleware.test.ts` anlegen:
+  Die Auth-Helfer-Tests in `tests/lib/auth.test.ts` prüfen nur `getExpectedAuthCookie` isoliert. Dieser zusätzliche Test reproduziert den konkreten Angriffsfall auf Ebene des Proxys selbst — inklusive des historischen Befunds, dass der öffentlich bekannte Hash `sha256("")` bei leerem `DASHBOARD_PASSWORD` als gültiges Cookie akzeptiert wurde.
+
+  Datei `tests/proxy.test.ts` anlegen (zum Zeitpunkt der Umsetzung `tests/middleware.test.ts` mit Import aus `@/middleware`, siehe Nachtrag oben):
 
   ```ts
   import { NextRequest } from "next/server";
   import { afterEach, describe, expect, it } from "vitest";
   import { AUTH_COOKIE, sha256Hex } from "@/lib/auth";
-  import { middleware } from "@/middleware";
+  import { proxy } from "@/proxy";
 
   const ORIGINAL_DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD;
 
@@ -7190,7 +7195,7 @@ Hinweis zur Teststrategie: Unit-getestet werden nur die Auth-Helfer (`sha256Hex`
     return new NextRequest("http://localhost/", { headers });
   }
 
-  describe("middleware (Zugriffsschutz, fail-closed)", () => {
+  describe("proxy (Zugriffsschutz, fail-closed)", () => {
     afterEach(restoreEnv);
 
     it(
@@ -7205,7 +7210,7 @@ Hinweis zur Teststrategie: Unit-getestet werden nur die Auth-Helfer (`sha256Hex`
         );
 
         const request = requestWithCookie(publiclyKnownEmptyHash);
-        const response = await middleware(request);
+        const response = await proxy(request);
 
         expect(response.status).not.toBe(200);
         expect(response.headers.get("location")).toContain("/login");
@@ -7217,7 +7222,7 @@ Hinweis zur Teststrategie: Unit-getestet werden nur die Auth-Helfer (`sha256Hex`
       const publiclyKnownEmptyHash = await sha256Hex("");
 
       const request = requestWithCookie(publiclyKnownEmptyHash);
-      const response = await middleware(request);
+      const response = await proxy(request);
 
       expect(response.status).not.toBe(200);
       expect(response.headers.get("location")).toContain("/login");
@@ -7226,7 +7231,7 @@ Hinweis zur Teststrategie: Unit-getestet werden nur die Auth-Helfer (`sha256Hex`
     it("verweigert Zugriff ganz ohne Cookie, wenn DASHBOARD_PASSWORD leer ist", async () => {
       process.env.DASHBOARD_PASSWORD = "";
       const request = requestWithCookie(undefined);
-      const response = await middleware(request);
+      const response = await proxy(request);
 
       expect(response.status).not.toBe(200);
       expect(response.headers.get("location")).toContain("/login");
@@ -7236,7 +7241,7 @@ Hinweis zur Teststrategie: Unit-getestet werden nur die Auth-Helfer (`sha256Hex`
       process.env.DASHBOARD_PASSWORD = "korrektes-passwort";
       const hash = await sha256Hex("korrektes-passwort");
       const request = requestWithCookie(hash);
-      const response = await middleware(request);
+      const response = await proxy(request);
 
       // NextResponse.next() liefert Status 200 und leitet nicht um.
       expect(response.status).toBe(200);
@@ -7245,7 +7250,7 @@ Hinweis zur Teststrategie: Unit-getestet werden nur die Auth-Helfer (`sha256Hex`
     it("verweigert Zugriff mit falschem Cookie, wenn ein Passwort konfiguriert ist", async () => {
       process.env.DASHBOARD_PASSWORD = "korrektes-passwort";
       const request = requestWithCookie(await sha256Hex("falsches-passwort"));
-      const response = await middleware(request);
+      const response = await proxy(request);
 
       expect(response.status).not.toBe(200);
       expect(response.headers.get("location")).toContain("/login");
@@ -7253,7 +7258,7 @@ Hinweis zur Teststrategie: Unit-getestet werden nur die Auth-Helfer (`sha256Hex`
   });
   ```
 
-  Run: `npx vitest run tests/middleware.test.ts`
+  Run: `npx vitest run tests/proxy.test.ts`
   Expected: PASS — 5 Tests grün.
 
 - [ ] **Step 7: Auth-Actions implementieren**
@@ -7366,7 +7371,7 @@ Hinweis zur Teststrategie: Unit-getestet werden nur die Auth-Helfer (`sha256Hex`
 - [ ] **Step 10: Commit**
 
   ```bash
-  git add src/middleware.ts tests/middleware.test.ts src/app/actions/auth.ts src/app/login/page.tsx
+  git add src/proxy.ts tests/proxy.test.ts src/app/actions/auth.ts src/app/login/page.tsx
   git commit -m "feat: login-seite, auth-actions und middleware-schutz (fail-closed)" -m "Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   ```
 
