@@ -29,7 +29,7 @@
 
 | # | Task | Liefert |
 |---|---|---|
-| 1 | Projekt-Scaffolding | package.json, Configs, `src/env.ts`, Platzhalter-App |
+| 1 | Env-Konfiguration | `src/env.ts` (Projektgeruest liegt bereits vor) |
 | 2 | DB-Fundament | Schema, DDL, Client, Settings, Test-Helper, Seed |
 | 3 | Ticket-Statusmaschine | `lib/tickets.ts` |
 | 4 | Mail-Hilfen | Subject-Tags, Whitelist, Rate-Limit/Kill-Switch, Conversations |
@@ -49,366 +49,37 @@
 
 ---
 
-### Task 1: Projekt-Scaffolding
+### Task 1: Env-Konfiguration
 
-**Ziel:** Aus dem leeren Verzeichnis wird ein lauffähiges Next.js-15-Projekt mit TypeScript (`strict`), Tailwind CSS 4, Vitest und allen Laufzeit-Dependencies — plus die typisierte Env-Konfiguration `getEnv()` (test-first). Am Ende dieses Tasks laufen `npm run build` und `npm test` grün, und es liegen drei Commits vor.
+**Ziel:** Die typisierte Umgebungskonfiguration `getEnv()` test-first liefern.
 
-**Wichtige Hinweise vorab:**
+**Voraussetzung:** Das Projektgeruest (`package.json`, `tsconfig.json`,
+`next.config.ts`, `postcss.config.mjs`, `vitest.config.ts`, `.env.example`,
+`README.md`, Platzhalter unter `src/app/`) wurde bereits im Deployment-Plan
+`docs/superpowers/plans/2026-08-30-docker-deployment.md` (Task 1) angelegt und
+committet. Es wird hier **nicht** erneut erstellt. Abweichung gegenueber der
+urspruenglichen Fassung dieses Tasks: `tsx` ist dort eine **Produktions**-
+Dependency, weil der Worker im Docker-Image ueber `node --import tsx` startet.
 
-- Alle Kommandos im Projektwurzelverzeichnis ausführen (dem Verzeichnis, in dem dieser Plan liegt bzw. `KI-Hausverwaltung/`).
-- Die npm-Installationen (Steps 4–5) können **mehrere Minuten** dauern: `better-sqlite3` kompiliert beim Install ein natives Modul (node-gyp). Auf macOS müssen dafür die Xcode Command Line Tools vorhanden sein; schlägt der native Build fehl: `xcode-select --install` ausführen und den Install wiederholen.
-- Voraussetzung: Node >= 20 und npm.
+**Voraussetzung pruefen:** `npm run build` und `npm test` laufen gruen, und
+`cat package.json` zeigt `tsx` unter `"dependencies"`. Ist das nicht der Fall,
+zuerst Task 1 des Deployment-Plans ausfuehren.
 
 **Files:**
 
-- Create: `.gitignore`
-- Create: `package.json` (Grundgerüst per Hand, Dependencies via `npm install`)
-- Create: `tsconfig.json`
-- Create: `next.config.ts`
-- Create: `postcss.config.mjs`
-- Create: `vitest.config.ts`
-- Create: `.env.example`
-- Create: `README.md`
-- Create: `src/app/globals.css`
-- Create: `src/app/layout.tsx`
-- Create: `src/app/page.tsx`
 - Create: `src/env.ts`
 - Test: `tests/env.test.ts`
 
 **Interfaces:**
 
-- Consumes: — (erster Task; es existiert noch kein Projektcode)
+- Consumes: Pfad-Alias `@/*` -> `./src/*` aus `tsconfig.json` und
+`vitest.config.ts`; die Variablenliste aus `.env.example`.
 - Produces:
-  - `src/env.ts`:
-    - `export type Env` = `{ ANTHROPIC_API_KEY: string; IMAP_HOST: string; IMAP_PORT: number; SMTP_HOST: string; SMTP_PORT: number; MAIL_USER: string; MAIL_PASSWORD: string; MAIL_ALIAS: string; DASHBOARD_PASSWORD: string; MAIL_RATE_LIMIT_PER_HOUR: number; DATABASE_PATH: string; ATTACHMENTS_DIR: string; POLL_INTERVAL_MS: number; LANDLORD_NAME: string }`
-    - `export function getEnv(): Env` — parst `process.env` bei **jedem** Aufruf neu (lazy, testbar); wirft `ZodError`, wenn Pflichtfelder fehlen oder Werte ungültig sind. Import in Folge-Tasks: `import { getEnv } from "@/env";`
-  - Pfad-Alias `@/*` → `./src/*`, identisch konfiguriert in `tsconfig.json` (`paths`) und `vitest.config.ts` (`resolve.alias`). Alle Folge-Tasks (Quellcode und Tests) importieren ausschließlich über diesen Alias.
-  - npm-Scripts, auf die alle Folge-Tasks sich verlassen: `dev`, `build`, `start`, `worker`, `test`, `test:watch`, `seed`, `smoke`.
-
-- [ ] **Step 1: Node-Version und Repository-Zustand prüfen**
-
-  ```bash
-  node --version && git log --oneline
-  ```
-
-  Expected: `node --version` gibt `v20.x` oder höher aus (z.B. `v22.x`). `git log` zeigt bereits zwei Commits (Design-Spec und dieser Plan) — das Repository ist initialisiert, `git init` ist **nicht** nötig. Schlägt `git log` fehl („not a git repository“), zuerst `git init -b main` ausführen.
-
-- [ ] **Step 2: `.gitignore` anlegen**
-
-  `data/` (SQLite-Datenbank + Mail-Anhänge) und `.env` (Secrets) dürfen nie ins Repository. Datei `.gitignore` vollständig anlegen:
-
-  ```
-  node_modules/
-  .next/
-  data/
-  .env
-  *.tsbuildinfo
-  next-env.d.ts
-  .DS_Store
-  ```
-
-- [ ] **Step 3: `package.json` mit den Projekt-Scripts anlegen**
-
-  Die Dependencies kommen in Steps 4–5 per `npm install` dazu. Datei `package.json` vollständig anlegen:
-
-  ```json
-  {
-    "name": "ki-hausverwaltung",
-    "version": "0.1.0",
-    "private": true,
-    "type": "module",
-    "scripts": {
-      "dev": "next dev",
-      "build": "next build",
-      "start": "next start",
-      "worker": "tsx src/worker/index.ts",
-      "test": "vitest run",
-      "test:watch": "vitest",
-      "seed": "tsx scripts/seed.ts",
-      "smoke": "tsx scripts/smoke.ts"
-    }
-  }
-  ```
-
-- [ ] **Step 4: Laufzeit-Dependencies installieren**
-
-  Hinweis: Dieser Schritt kann mehrere Minuten dauern — `better-sqlite3` baut ein natives Modul.
-
-  ```bash
-  npm install "next@^15" "react@^19" "react-dom@^19" @anthropic-ai/sdk "zod@^3.25" drizzle-orm "better-sqlite3@^12" imapflow mailparser nodemailer "pdf-parse@^1.1.1" dotenv
-  ```
-
-  Expected: Exit-Code 0, Ausgabe `added … packages`. Warnungen über `deprecated`-Pakete sind unkritisch; Fehler beim nativen Build von `better-sqlite3` sind es nicht (dann Xcode Command Line Tools installieren und wiederholen, siehe Hinweise oben).
-
-  **Warum `pdf-parse@^1.1.1` gepinnt ist:** Ohne Pin installiert npm die 2.x-Linie. Deren `exports`-Map kennt nur `"."`, `"./worker"` und `"./node"` — es gibt kein `lib/`-Verzeichnis mehr, und der in Task 7 verwendete Import `pdf-parse/lib/pdf-parse.js` wäre nicht auflösbar. Da `src/lib/documents.ts` dadurch gar nicht lädt, würden auch alle Tasks scheitern, die indirekt davon abhängen (8, 9, 10, 13) sowie Dashboard und Worker.
-
-- [ ] **Step 5: Dev-Dependencies installieren**
-
-  ```bash
-  npm install --save-dev "typescript@^5" @types/node @types/react @types/react-dom @types/better-sqlite3 @types/mailparser @types/nodemailer tsx "vitest@^3" "tailwindcss@^4" "@tailwindcss/postcss@^4"
-  ```
-
-  Expected: Exit-Code 0, Ausgabe `added … packages`.
-
-  **Warum `typescript@^5` gepinnt ist:** Ohne Pin installiert npm TypeScript 7.x, das Next.js 15 hart ablehnt — `next build` bricht dann schon beim Laden von `next.config.ts` ab (`TypeError: Cannot read properties of undefined (reading 'fileExists')`). Mit TypeScript 6 scheitert stattdessen der Typecheck an `src/app/layout.tsx`, weil TS 6 Side-Effect-Importe untypisierter Module (`./globals.css`) verbietet. Nur die 5er-Linie baut grün — und alle Build-Gates dieses Plans (Tasks 1, 10, 11, 12, 13, 14, 15, 16, 17) hängen daran.
-
-  **Warum `@types/react` und `@types/react-dom` mitinstalliert werden:** Next 15 führt sie als Pflichtpakete. Fehlen sie, installiert `next build` sie selbst nach und verändert dabei `package.json` und `package-lock.json` — die Änderung würde nie committet und Task 17 Step 9 (`git status` → sauberer Arbeitsbaum) schlüge fehl.
-
-- [ ] **Step 6: `package.json` als Prüf-Referenz kontrollieren**
-
-  Run: `cat package.json`
-
-  Expected — alle folgenden Punkte müssen zutreffen (npm schreibt konkrete Versionen mit Caret, z.B. `"next": "^15.5.4"`; Minor/Patch dürfen neuer sein, die **Major-Versionen MÜSSEN stimmen**):
-
-  - `"private": true` und `"type": "module"` sind gesetzt.
-  - `"scripts"` exakt:
-
-    ```json
-    {
-      "dev": "next dev",
-      "build": "next build",
-      "start": "next start",
-      "worker": "tsx src/worker/index.ts",
-      "test": "vitest run",
-      "test:watch": "vitest",
-      "seed": "tsx scripts/seed.ts",
-      "smoke": "tsx scripts/smoke.ts"
-    }
-    ```
-
-  - `"dependencies"` enthält genau diese 12 Pakete: `next` (^15), `react` (^19), `react-dom` (^19), `@anthropic-ai/sdk`, `zod` (^3.25), `drizzle-orm`, `better-sqlite3` (^12), `imapflow`, `mailparser`, `nodemailer`, `pdf-parse` (**^1**, nicht 2.x), `dotenv`.
-  - `"devDependencies"` enthält genau diese 11 Pakete: `typescript` (**^5**, nicht 6.x oder 7.x), `@types/node`, `@types/react`, `@types/react-dom`, `@types/better-sqlite3`, `@types/mailparser`, `@types/nodemailer`, `tsx`, `vitest` (^3), `tailwindcss` (^4), `@tailwindcss/postcss` (^4).
-
-- [ ] **Step 7: Commit**
-
-  ```bash
-  git add .gitignore package.json package-lock.json
-  git commit -m "chore: npm-Projekt mit Scripts und Dependencies initialisiert" -m "Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
-  ```
-
-- [ ] **Step 8: `tsconfig.json` anlegen**
-
-  Strict-Modus, `moduleResolution: "bundler"`, `jsx: "preserve"`, Next-Plugin und der verbindliche Pfad-Alias `@/*` → `./src/*`. Datei `tsconfig.json` vollständig anlegen:
-
-  ```json
-  {
-    "compilerOptions": {
-      "target": "ES2017",
-      "lib": ["dom", "dom.iterable", "esnext"],
-      "allowJs": true,
-      "skipLibCheck": true,
-      "strict": true,
-      "noEmit": true,
-      "esModuleInterop": true,
-      "module": "esnext",
-      "moduleResolution": "bundler",
-      "resolveJsonModule": true,
-      "isolatedModules": true,
-      "jsx": "preserve",
-      "incremental": true,
-      "plugins": [
-        {
-          "name": "next"
-        }
-      ],
-      "paths": {
-        "@/*": ["./src/*"]
-      }
-    },
-    "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
-    "exclude": ["node_modules"]
-  }
-  ```
-
-- [ ] **Step 9: `next.config.ts` anlegen**
-
-  Bewusst leer/Default (so verlangt es der Vertrag). Datei `next.config.ts` vollständig anlegen:
-
-  ```ts
-  import type { NextConfig } from "next";
-
-  const nextConfig: NextConfig = {};
-
-  export default nextConfig;
-  ```
-
-- [ ] **Step 10: `postcss.config.mjs` anlegen**
-
-  Tailwind CSS 4 wird als PostCSS-Plugin eingebunden. Datei `postcss.config.mjs` vollständig anlegen:
-
-  ```js
-  const config = {
-    plugins: ["@tailwindcss/postcss"],
-  };
-
-  export default config;
-  ```
-
-- [ ] **Step 11: `vitest.config.ts` anlegen**
-
-  Node-Umgebung und derselbe Alias `@` → `./src` wie in `tsconfig.json`, damit Tests exakt dieselben Importpfade nutzen wie der Quellcode. Datei `vitest.config.ts` vollständig anlegen:
-
-  ```ts
-  import path from "node:path";
-  import { fileURLToPath } from "node:url";
-  import { defineConfig } from "vitest/config";
-
-  const rootDir = path.dirname(fileURLToPath(import.meta.url));
-
-  export default defineConfig({
-    test: {
-      environment: "node",
-    },
-    resolve: {
-      alias: {
-        "@": path.resolve(rootDir, "src"),
-      },
-    },
-  });
-  ```
-
-- [ ] **Step 12: `.env.example` anlegen**
-
-  Alle Umgebungsvariablen des Projekts; Pflichtfelder bleiben leer, optionale Felder zeigen ihre Defaults. Datei `.env.example` vollständig anlegen:
-
-  ```
-  # Anthropic API-Schlüssel (PFLICHT) — von https://console.anthropic.com
-  ANTHROPIC_API_KEY=
-
-  # IMAP-Zugang zum Mail-Postfach (Defaults: Fastmail)
-  IMAP_HOST=imap.fastmail.com
-  IMAP_PORT=993
-
-  # SMTP-Versand (Defaults: Fastmail, Port 465 = implizites TLS)
-  SMTP_HOST=smtp.fastmail.com
-  SMTP_PORT=465
-
-  # Fastmail-Login (PFLICHT) — die Haupt-E-Mail-Adresse des Kontos
-  MAIL_USER=
-
-  # Fastmail-App-Passwort mit IMAP- und SMTP-Berechtigung (PFLICHT)
-  MAIL_PASSWORD=
-
-  # Dedizierter Alias der Hausverwaltung (PFLICHT), z.B. hausverwaltung@example.com
-  # Nur Mails AN diesen Alias werden verarbeitet; er ist zugleich die Absenderadresse.
-  MAIL_ALIAS=
-
-  # Passwort fuer das Vermieter-Dashboard (PFLICHT)
-  DASHBOARD_PASSWORD=
-
-  # Kill-Switch: maximale Anzahl ausgehender Mails pro Stunde
-  MAIL_RATE_LIMIT_PER_HOUR=20
-
-  # Pfad zur SQLite-Datenbankdatei
-  DATABASE_PATH=./data/hausverwaltung.db
-
-  # Ablageverzeichnis fuer Mail-Anhaenge
-  ATTACHMENTS_DIR=./data/attachments
-
-  # IMAP-Polling-Intervall des Workers in Millisekunden
-  POLL_INTERVAL_MS=30000
-
-  # Name des Vermieters (erscheint im Systemprompt der KI)
-  LANDLORD_NAME=Der Vermieter
-  ```
-
-- [ ] **Step 13: `src/app/globals.css` anlegen**
-
-  Datei `src/app/globals.css` vollständig anlegen:
-
-  ```css
-  @import "tailwindcss";
-  ```
-
-- [ ] **Step 14: Platzhalter `src/app/layout.tsx` anlegen**
-
-  Minimales Root-Layout mit `lang="de"` (wird in Task 11 durch das Layout mit Navigation ersetzt). Datei `src/app/layout.tsx` vollständig anlegen:
-
-  ```tsx
-  import type { Metadata } from "next";
-  import type { ReactNode } from "react";
-  import "./globals.css";
-
-  export const metadata: Metadata = {
-    title: "KI-Hausverwaltung",
-    description: "KI-gestützte Hausverwaltung per E-Mail — Proof of Concept",
-  };
-
-  export default function RootLayout({ children }: { children: ReactNode }) {
-    return (
-      <html lang="de">
-        <body className="min-h-screen bg-gray-50 text-gray-900 antialiased">
-          {children}
-        </body>
-      </html>
-    );
-  }
-  ```
-
-- [ ] **Step 15: Platzhalter `src/app/page.tsx` anlegen**
-
-  Minimale Startseite (wird in Task 11 durch die Übersicht ersetzt). Datei `src/app/page.tsx` vollständig anlegen:
-
-  ```tsx
-  export default function HomePage() {
-    return (
-      <main className="p-8">
-        <h1 className="text-2xl font-bold">KI-Hausverwaltung</h1>
-        <p className="mt-2 text-gray-600">
-          Platzhalter-Startseite — das Projektgerüst steht.
-        </p>
-      </main>
-    );
-  }
-  ```
-
-- [ ] **Step 16: README-Stub anlegen**
-
-  Kurzer Stub (die vollständige Setup-Anleitung ist Bestandteil von Task 17). Datei `README.md` vollständig anlegen:
-
-  ````md
-  # KI-Hausverwaltung
-
-  E-Mail-basierte, KI-gestützte Hausverwaltung — Proof of Concept.
-
-  Mieter melden Anliegen per E-Mail an einen dedizierten Alias. Ein KI-Agent
-  (Claude Opus 5) führt den Support-Dialog auf Deutsch, sammelt gezielt
-  Informationen, bereitet Genehmigungsanträge für den Vermieter vor und
-  kontaktiert nach dessen Freigabe per Klick Handwerker per E-Mail. Der
-  Vermieter steuert alles über ein Next.js-Dashboard.
-
-  ## Stack
-
-  - Next.js 15 (App Router, `src/`-Layout) + separater Worker-Prozess (IMAP-Polling)
-  - SQLite über better-sqlite3 + Drizzle ORM, FTS5-Volltextsuche
-  - Anthropic TypeScript SDK, Modell `claude-opus-5`
-  - Tailwind CSS 4, Vitest
-
-  ## Schnellstart
-
-  ```bash
-  npm install
-  cp .env.example .env   # Pflichtwerte eintragen (siehe Kommentare in der Datei)
-  npm run dev            # Dashboard auf http://localhost:3000
-  npm run worker         # E-Mail-Worker, separates Terminal
-  npm test               # Unit-Tests
-  ```
-  ````
-
-- [ ] **Step 17: Build ausführen, Erfolg verifizieren**
-
-  Run: `npm run build`
-
-  Expected: Build endet mit Exit-Code 0, Ausgabe enthält „Compiled successfully“ und eine Routen-Tabelle mit `/`. Keine Typfehler. Der erste Build erzeugt außerdem `next-env.d.ts` und `.next/` (beide gitignored). Ein Hinweis, dass kein ESLint konfiguriert ist, ist unkritisch — ESLint ist bewusst nicht Teil des PoC.
-
-- [ ] **Step 18: Commit**
-
-  ```bash
-  git add tsconfig.json next.config.ts postcss.config.mjs vitest.config.ts .env.example README.md src/app
-  git commit -m "feat: Next.js-Grundgeruest mit Tailwind, Vitest und Konfiguration" -m "Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
-  ```
-
-- [ ] **Step 19: Fehlschlagenden Test schreiben**
+- `src/env.ts`:
+  - `export type Env` = `{ ANTHROPIC_API_KEY: string; IMAP_HOST: string; IMAP_PORT: number; SMTP_HOST: string; SMTP_PORT: number; MAIL_USER: string; MAIL_PASSWORD: string; MAIL_ALIAS: string; DASHBOARD_PASSWORD: string; MAIL_RATE_LIMIT_PER_HOUR: number; DATABASE_PATH: string; ATTACHMENTS_DIR: string; POLL_INTERVAL_MS: number; LANDLORD_NAME: string }`
+  - `export function getEnv(): Env` — parst `process.env` bei **jedem** Aufruf neu (lazy, testbar); wirft `ZodError`, wenn Pflichtfelder fehlen oder Werte ungueltig sind. Import in Folge-Tasks: `import { getEnv } from "@/env";`
+
+- [ ] **Step 1: Fehlschlagenden Test schreiben**
 
   Der Test deckt ab: (a) Pflichtfelder + alle Defaults, (b) Zahl-Koersion aus Strings, (c) Fehler bei fehlendem Pflichtfeld, (d) Fehler bei ungültiger `MAIL_ALIAS`, (e) Lazy-Verhalten — eine Änderung an `process.env` wirkt beim nächsten `getEnv()`-Aufruf. `beforeEach`/`afterEach` räumen `process.env` auf und stellen die ursprünglichen Shell-Werte wieder her. Datei `tests/env.test.ts` vollständig anlegen:
 
@@ -514,13 +185,13 @@
   });
   ```
 
-- [ ] **Step 20: Test ausführen, Fehlschlag verifizieren**
+- [ ] **Step 2: Test ausführen, Fehlschlag verifizieren**
 
   Run: `npx vitest run tests/env.test.ts`
 
   Expected: FAIL mit `Failed to resolve import "@/env" from "tests/env.test.ts"` — `src/env.ts` existiert noch nicht.
 
-- [ ] **Step 21: Implementierung**
+- [ ] **Step 3: Implementierung**
 
   Datei `src/env.ts` vollständig anlegen:
 
@@ -556,13 +227,13 @@
   }
   ```
 
-- [ ] **Step 22: Tests ausführen, Erfolg verifizieren**
+- [ ] **Step 4: Tests ausführen, Erfolg verifizieren**
 
   Run: `npx vitest run tests/env.test.ts`
 
   Expected: PASS — `Test Files  1 passed (1)`, `Tests  5 passed (5)`.
 
-- [ ] **Step 23: Commit**
+- [ ] **Step 5: Commit**
 
   ```bash
   git add src/env.ts tests/env.test.ts
