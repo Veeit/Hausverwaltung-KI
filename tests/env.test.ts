@@ -97,3 +97,106 @@ describe("getEnv", () => {
     expect(getEnv().LANDLORD_NAME).toBe("Der Vermieter");
   });
 });
+
+// Nachstellung des Ersteinrichtungs-Fehlers: ein Betreiber trägt bei
+// MAIL_ALIAS nur den Namensteil statt einer vollständigen Adresse ein und
+// lässt gleichzeitig ANTHROPIC_API_KEY leer. getEnv() darf dabei keinen
+// rohen ZodError mehr durchreichen, sondern muss eine lesbare, deutsche
+// Sammelmeldung werfen, die BEIDE Variablen nennt.
+describe("getEnv Fehlermeldung bei ungültiger Konfiguration", () => {
+  it("wirft keinen rohen ZodError, sondern ein normales Error-Objekt", () => {
+    delete process.env.ANTHROPIC_API_KEY;
+    try {
+      getEnv();
+      expect.unreachable("getEnv() hätte werfen müssen");
+    } catch (err) {
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).name).not.toBe("ZodError");
+    }
+  });
+
+  it("nennt alle fehlerhaften Variablen auf einmal, nicht nur die erste", () => {
+    delete process.env.ANTHROPIC_API_KEY;
+    process.env.MAIL_ALIAS = "hausverwaltung-tool"; // der reale Tippfehler: nur Namensteil, keine vollständige Adresse
+    let message = "";
+    try {
+      getEnv();
+      expect.unreachable("getEnv() hätte werfen müssen");
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toContain("ANTHROPIC_API_KEY");
+    expect(message).toContain("MAIL_ALIAS");
+  });
+
+  it("formuliert eine fehlende Pflichtvariable anders als eine ungültige", () => {
+    delete process.env.ANTHROPIC_API_KEY;
+    process.env.MAIL_ALIAS = "hausverwaltung-tool";
+    let message = "";
+    try {
+      getEnv();
+      expect.unreachable("getEnv() hätte werfen müssen");
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    const anthropicLine = message.split("\n").find((line) => line.includes("ANTHROPIC_API_KEY"));
+    const aliasLine = message.split("\n").find((line) => line.includes("MAIL_ALIAS"));
+    expect(anthropicLine).toMatch(/fehlt/i);
+    expect(aliasLine).toMatch(/ungültig/i);
+    expect(anthropicLine).not.toMatch(/ungültig/i);
+    expect(aliasLine).not.toMatch(/fehlt/i);
+  });
+
+  it("nennt bei MAIL_ALIAS ein vollständiges Beispiel und zeigt den vorgefundenen (unkritischen) Wert", () => {
+    process.env.MAIL_ALIAS = "hausverwaltung-tool";
+    let message = "";
+    try {
+      getEnv();
+      expect.unreachable("getEnv() hätte werfen müssen");
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    // Beispiel muss eine vollständige Adresse mit @ und Domain sein.
+    expect(message).toMatch(/[a-z0-9.-]+@[a-z0-9.-]+\.[a-z]+/i);
+    // Der konkret vorgefundene (fehlerhafte) Wert hilft beim Debuggen und ist
+    // unkritisch (keine Zugangsdaten) — darf also angezeigt werden.
+    expect(message).toContain("hausverwaltung-tool");
+  });
+
+  it("verweist auf .env und .env.example", () => {
+    delete process.env.ANTHROPIC_API_KEY;
+    let message = "";
+    try {
+      getEnv();
+      expect.unreachable("getEnv() hätte werfen müssen");
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toContain(".env.example");
+    expect(message).toContain(".env");
+  });
+
+  it("gibt bei fehlenden Geheimnissen (API-Key, Mail-Passwort, Dashboard-Passwort) niemals deren Wert aus", () => {
+    process.env.ANTHROPIC_API_KEY = "";
+    process.env.MAIL_PASSWORD = "";
+    process.env.DASHBOARD_PASSWORD = "";
+    let message = "";
+    try {
+      getEnv();
+      expect.unreachable("getEnv() hätte werfen müssen");
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    const secretLines = message
+      .split("\n")
+      .filter((line) =>
+        ["ANTHROPIC_API_KEY", "MAIL_PASSWORD", "DASHBOARD_PASSWORD"].some((name) =>
+          line.includes(name),
+        ),
+      );
+    expect(secretLines.length).toBeGreaterThan(0);
+    for (const line of secretLines) {
+      expect(line).not.toMatch(/Wert/i);
+    }
+  });
+});
