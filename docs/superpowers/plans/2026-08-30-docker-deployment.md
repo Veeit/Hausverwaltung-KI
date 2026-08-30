@@ -785,7 +785,7 @@ PY
   const WORKER_ENTRY = "src/worker/index.ts";
   const SHUTDOWN_TIMEOUT_MS = 10_000;
 
-  /** @type {{ name: string, child: import("node:child_process").ChildProcess }[]} */
+  /** @type {{ name: string, child: import("node:child_process").ChildProcess, settled: boolean }[]} */
   const children = [];
   let shuttingDown = false;
 
@@ -804,26 +804,29 @@ PY
     });
   }
 
-  function hasExited(child) {
-    return child.exitCode !== null || child.signalCode !== null;
+  function hasExited(entry) {
+    return entry.settled;
   }
 
   function start(name, command, args) {
     console.log(`[supervisor] starte ${name}: ${command} ${args.join(" ")}`);
     const child = spawn(command, args, {
       stdio: ["ignore", "pipe", "pipe"],
-      env: process.env,
     });
 
     pipeWithPrefix(name, child.stdout, process.stdout);
     pipeWithPrefix(name, child.stderr, process.stderr);
 
+    const entry = { name, child, settled: false };
+
     child.on("error", (error) => {
+      entry.settled = true;
       console.error(`[supervisor] ${name} konnte nicht gestartet werden: ${error.message}`);
       shutdown(1);
     });
 
     child.on("exit", (code, signal) => {
+      entry.settled = true;
       console.log(
         `[supervisor] ${name} beendet (code=${code ?? "null"}, signal=${signal ?? "null"})`,
       );
@@ -832,27 +835,29 @@ PY
       shutdown(typeof code === "number" ? code : 1);
     });
 
-    children.push({ name, child });
+    children.push(entry);
   }
 
   function shutdown(exitCode) {
     if (shuttingDown) return;
     shuttingDown = true;
 
-    for (const { child } of children) {
-      if (!hasExited(child)) child.kill("SIGTERM");
+    for (const entry of children) {
+      if (!hasExited(entry)) entry.child.kill("SIGTERM");
     }
 
     const kill = setTimeout(() => {
       console.error("[supervisor] Zeitlimit erreicht — erzwinge SIGKILL");
-      for (const { child } of children) {
-        if (!hasExited(child)) child.kill("SIGKILL");
+      for (const entry of children) {
+        if (!hasExited(entry)) entry.child.kill("SIGKILL");
       }
+      clearInterval(poll);
+      clearTimeout(kill);
       process.exit(exitCode);
     }, SHUTDOWN_TIMEOUT_MS);
 
     const poll = setInterval(() => {
-      if (children.every(({ child }) => hasExited(child))) {
+      if (children.every(hasExited)) {
         clearInterval(poll);
         clearTimeout(kill);
         process.exit(exitCode);
