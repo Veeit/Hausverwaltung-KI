@@ -1,0 +1,19 @@
+# Lokales Bauen und Starten des Images auf dem Entwicklungsrechner.
+# Fuer den Betrieb auf Unraid siehe deploy/unraid/docker-compose.yml.
+services:
+  app:
+    build:
+      context: .
+    image: ki-hausverwaltung:local
+    ports:
+      # Host-Port ueber HV_PORT ueberschreibbar, Standard 3000.
+      - "${HV_PORT:-3000}:3000"
+    environment:
+      # Ohne echte Zugangsdaten laeuft nur das Dashboard.
+      RUN_WORKER: "0"
+    volumes:
+      - hv-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  hv-data:
