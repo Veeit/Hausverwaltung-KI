@@ -6,6 +6,7 @@ import {
 } from "@/app/actions/masterdata";
 import { getDb } from "@/db/client";
 import { contractors } from "@/db/schema";
+import { ActionForm } from "@/app/components/ActionForm";
 
 export const dynamic = "force-dynamic";
 
@@ -76,20 +77,20 @@ export default function HandwerkerPage() {
                 />
               </td>
               <td className="py-2 whitespace-nowrap">
-                <form
+                <ActionForm
                   action={updateContractor.bind(null, c.id)}
                   id={`contractor-${c.id}`}
-                  className="inline-block mr-2"
+                  className="inline-block mr-2 align-top"
                 >
                   <button type="submit" className="border rounded px-2 py-1">
                     Speichern
                   </button>
-                </form>
-                <form action={deleteContractor.bind(null, c.id)} className="inline-block">
+                </ActionForm>
+                <ActionForm action={deleteContractor.bind(null, c.id)} className="inline-block align-top">
                   <button type="submit" className="border rounded px-2 py-1 text-red-700">
                     Löschen
                   </button>
-                </form>
+                </ActionForm>
               </td>
             </tr>
           ))}
@@ -104,7 +105,7 @@ export default function HandwerkerPage() {
       </table>
 
       <h2 className="text-xl font-semibold mb-2">Neuen Handwerker anlegen</h2>
-      <form action={createContractor} className="grid gap-2 max-w-md">
+      <ActionForm action={createContractor} className="grid gap-2 max-w-md">
         <input
           name="name"
           placeholder="Name"
@@ -132,7 +133,7 @@ export default function HandwerkerPage() {
         <button type="submit" className="border rounded px-2 py-1 font-semibold">
           Anlegen
         </button>
-      </form>
+      </ActionForm>
     </main>
   );
 }

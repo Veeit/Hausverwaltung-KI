@@ -1,5 +1,6 @@
 import { removeDocument, uploadDocument } from "@/app/actions/documents";
 import { listDocuments } from "@/lib/documents";
+import { ActionForm } from "@/app/components/ActionForm";
 
 export const dynamic = "force-dynamic";
 
@@ -36,11 +37,11 @@ export default function DokumentePage() {
                 {new Date(doc.createdAt).toLocaleDateString("de-DE")}
               </td>
               <td className="py-2">
-                <form action={removeDocument.bind(null, doc.id)}>
+                <ActionForm action={removeDocument.bind(null, doc.id)}>
                   <button type="submit" className="border rounded px-2 py-1 text-red-700">
                     Löschen
                   </button>
-                </form>
+                </ActionForm>
               </td>
             </tr>
           ))}
@@ -55,7 +56,7 @@ export default function DokumentePage() {
       </table>
 
       <h2 className="text-xl font-semibold mb-2">Dokument hochladen</h2>
-      <form action={uploadDocument} className="flex items-center gap-2">
+      <ActionForm action={uploadDocument} className="flex flex-wrap items-center gap-2">
         <input
           type="file"
           name="file"
@@ -66,7 +67,7 @@ export default function DokumentePage() {
         <button type="submit" className="border rounded px-2 py-1 font-semibold">
           Hochladen
         </button>
-      </form>
+      </ActionForm>
     </main>
   );
 }

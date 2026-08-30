@@ -2,6 +2,7 @@ import Link from "next/link";
 import { createTenant, deleteTenant, updateTenant } from "@/app/actions/masterdata";
 import { getDb } from "@/db/client";
 import { properties, tenants } from "@/db/schema";
+import { ActionForm } from "@/app/components/ActionForm";
 
 export const dynamic = "force-dynamic";
 
@@ -87,20 +88,20 @@ export default function MieterPage() {
                 />
               </td>
               <td className="py-2 whitespace-nowrap">
-                <form
+                <ActionForm
                   action={updateTenant.bind(null, t.id)}
                   id={`tenant-${t.id}`}
-                  className="inline-block mr-2"
+                  className="inline-block mr-2 align-top"
                 >
                   <button type="submit" className="border rounded px-2 py-1">
                     Speichern
                   </button>
-                </form>
-                <form action={deleteTenant.bind(null, t.id)} className="inline-block">
+                </ActionForm>
+                <ActionForm action={deleteTenant.bind(null, t.id)} className="inline-block align-top">
                   <button type="submit" className="border rounded px-2 py-1 text-red-700">
                     Löschen
                   </button>
-                </form>
+                </ActionForm>
               </td>
             </tr>
           ))}
@@ -124,7 +125,7 @@ export default function MieterPage() {
           ein Objekt anlegen.
         </p>
       ) : (
-        <form action={createTenant} className="grid gap-2 max-w-md">
+        <ActionForm action={createTenant} className="grid gap-2 max-w-md">
           <input
             name="name"
             placeholder="Name"
@@ -158,7 +159,7 @@ export default function MieterPage() {
           <button type="submit" className="border rounded px-2 py-1 font-semibold">
             Anlegen
           </button>
-        </form>
+        </ActionForm>
       )}
     </main>
   );

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { createProperty, deleteProperty, updateProperty } from "@/app/actions/masterdata";
 import { getDb } from "@/db/client";
 import { properties } from "@/db/schema";
+import { ActionForm } from "@/app/components/ActionForm";
 
 export const dynamic = "force-dynamic";
 
@@ -33,7 +34,7 @@ export default function ObjektePage() {
           {allProperties.map((p) => (
             <tr key={p.id} className="border-b align-top">
               <td className="py-2 pr-4">
-                <form action={updateProperty.bind(null, p.id)} className="flex gap-2">
+                <ActionForm action={updateProperty.bind(null, p.id)} className="flex flex-wrap gap-2">
                   <input
                     name="address"
                     defaultValue={p.address}
@@ -43,17 +44,17 @@ export default function ObjektePage() {
                   <button type="submit" className="border rounded px-2 py-1">
                     Speichern
                   </button>
-                </form>
+                </ActionForm>
               </td>
               <td className="py-2 pr-4 whitespace-nowrap">
                 {new Date(p.createdAt).toLocaleDateString("de-DE")}
               </td>
               <td className="py-2">
-                <form action={deleteProperty.bind(null, p.id)}>
+                <ActionForm action={deleteProperty.bind(null, p.id)}>
                   <button type="submit" className="border rounded px-2 py-1 text-red-700">
                     Löschen
                   </button>
-                </form>
+                </ActionForm>
               </td>
             </tr>
           ))}
@@ -68,7 +69,7 @@ export default function ObjektePage() {
       </table>
 
       <h2 className="text-xl font-semibold mb-2">Neues Objekt anlegen</h2>
-      <form action={createProperty} className="flex gap-2 max-w-md">
+      <ActionForm action={createProperty} className="flex flex-wrap gap-2 max-w-md">
         <input
           name="address"
           placeholder="Straße Hausnr., PLZ Ort"
@@ -78,7 +79,7 @@ export default function ObjektePage() {
         <button type="submit" className="border rounded px-2 py-1 font-semibold">
           Anlegen
         </button>
-      </form>
+      </ActionForm>
     </main>
   );
 }

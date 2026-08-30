@@ -8,6 +8,7 @@ import {
   rejectApproval,
   updateApprovalDraft,
 } from "@/app/actions/approvals";
+import { ActionForm } from "@/app/components/ActionForm";
 
 export const dynamic = "force-dynamic";
 
@@ -107,7 +108,7 @@ export default function GenehmigungenPage() {
                 </dd>
               </dl>
 
-              <form action={saveDraftAction} className="space-y-2 mb-4">
+              <ActionForm action={saveDraftAction} className="space-y-2 mb-4">
                 <input type="hidden" name="approvalId" value={row.approval.id} />
                 <label
                   htmlFor={`subject-${row.approval.id}`}
@@ -143,10 +144,10 @@ export default function GenehmigungenPage() {
                 >
                   Entwurf speichern
                 </button>
-              </form>
+              </ActionForm>
 
               <div className="flex flex-wrap items-end gap-4">
-                <form action={approveAction}>
+                <ActionForm action={approveAction}>
                   <input type="hidden" name="approvalId" value={row.approval.id} />
                   <button
                     type="submit"
@@ -154,9 +155,9 @@ export default function GenehmigungenPage() {
                   >
                     Genehmigen und Mail senden
                   </button>
-                </form>
+                </ActionForm>
 
-                <form action={rejectAction} className="flex items-end gap-2">
+                <ActionForm action={rejectAction} className="flex flex-wrap items-end gap-2">
                   <input type="hidden" name="approvalId" value={row.approval.id} />
                   <div>
                     <label
@@ -180,7 +181,7 @@ export default function GenehmigungenPage() {
                   >
                     Ablehnen
                   </button>
-                </form>
+                </ActionForm>
               </div>
             </li>
           ))}
