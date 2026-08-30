@@ -8,6 +8,7 @@ import { conversations, messages, properties, tenants, tickets } from "@/db/sche
 import { sha256Hex } from "@/lib/auth";
 import { sendSmtp } from "@/channel/smtp";
 import { sendManualReply, setTicketStatus } from "@/app/actions/tickets";
+import type { TicketStatus } from "@/lib/tickets";
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("next/navigation", () => ({
@@ -101,6 +102,17 @@ describe("setTicketStatus", () => {
 
     const updated = db.select().from(tickets).where(eq(tickets.id, ticket.id)).get();
     expect(updated?.status).toBe("erledigt");
+  });
+
+  it("wirft bei unbekanntem Statuswert eine deutsche Fehlermeldung und lässt das Ticket unverändert", async () => {
+    const { ticket } = seed("neu");
+
+    await expect(
+      setTicketStatus(ticket.id, "voellig_unbekannter_status" as TicketStatus),
+    ).rejects.toThrow(/[Uu]nbekannt.*voellig_unbekannter_status/);
+
+    const unchanged = db.select().from(tickets).where(eq(tickets.id, ticket.id)).get();
+    expect(unchanged?.status).toBe("neu");
   });
 });
 

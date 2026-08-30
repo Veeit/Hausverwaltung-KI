@@ -21,10 +21,25 @@ export const TICKET_TRANSITIONS: Record<TicketStatus, TicketStatus[]> = {
   erledigt: [],
 };
 
-export class InvalidTransitionError extends Error {}
+export class InvalidTransitionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidTransitionError";
+  }
+}
 
 export function canTransition(from: TicketStatus, to: TicketStatus): boolean {
-  return TICKET_TRANSITIONS[from].includes(to);
+  const allowedTargets = TICKET_TRANSITIONS[from];
+  if (!allowedTargets) {
+    // Kann auftreten, wenn `from` aus der Datenbank stammt (Altbestand,
+    // direkter DB-Zugriff) und kein bekannter Status mehr ist. Ohne diese
+    // Prüfung würde TICKET_TRANSITIONS[from] undefined liefern und der
+    // nachfolgende .includes()-Aufruf einen nichtssagenden TypeError werfen.
+    throw new Error(
+      `Unbekannter Ticketstatus "${from}": Statuswechsel kann nicht geprüft werden.`,
+    );
+  }
+  return allowedTargets.includes(to);
 }
 
 export function createTicket(input: {

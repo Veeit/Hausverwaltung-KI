@@ -89,6 +89,19 @@ describe("canTransition", () => {
     }
     expect(TICKET_TRANSITIONS.erledigt).toEqual([]);
   });
+
+  it("wirft bei unbekanntem Ausgangsstatus eine aussagekräftige Fehlermeldung statt eines TypeError", () => {
+    const unbekannt = "archiviert" as TicketStatus;
+    expect(() => canTransition(unbekannt, "erledigt")).toThrow(/archiviert/);
+    expect(() => canTransition(unbekannt, "erledigt")).not.toThrow(TypeError);
+  });
+});
+
+describe("InvalidTransitionError", () => {
+  it("trägt den Namen 'InvalidTransitionError' statt des generischen 'Error'", () => {
+    const err = new InvalidTransitionError("Testfehler");
+    expect(err.name).toBe("InvalidTransitionError");
+  });
 });
 
 describe("createTicket", () => {
@@ -195,5 +208,21 @@ describe("transitionTicket", () => {
 
   it("wirft Error, wenn das Ticket nicht existiert", () => {
     expect(() => transitionTicket(999, "erledigt")).toThrow("Ticket 999 nicht gefunden");
+  });
+
+  it("wirft eine aussagekräftige Fehlermeldung statt eines TypeError, wenn das Ticket in der Datenbank einen unbekannten Ausgangsstatus hat", () => {
+    const { tenantId, conversationId } = seedTenantAndConversation();
+    const id = createTicket({
+      tenantId,
+      conversationId,
+      type: "reparatur",
+      title: "Türschloss defekt",
+    });
+    // Simuliert Altbestand/direkten DB-Zugriff mit einem Status, den die
+    // Statusmaschine nicht kennt.
+    db.update(tickets).set({ status: "archiviert" }).where(eq(tickets.id, id)).run();
+
+    expect(() => transitionTicket(id, "erledigt")).toThrow(/archiviert/);
+    expect(() => transitionTicket(id, "erledigt")).not.toThrow(TypeError);
   });
 });
