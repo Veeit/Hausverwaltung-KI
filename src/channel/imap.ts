@@ -25,7 +25,14 @@ export async function fetchNewEmails(): Promise<IncomingEmail[]> {
     // Die Alias-Einschränkung muss bereits Teil der IMAP-Suche sein, nicht erst
     // des nachgelagerten Filters: sonst würde die private Post des Nutzers
     // (dieser Account ist sein Fastmail-Postfach) mitheruntergeladen und
-    // durch messageFlagsAdd unwiderruflich als \Seen markiert.
+    // durch messageFlagsAdd unwiderruflich als \Seen markiert. Die serverseitige
+    // TO/CC-SEARCH matcht laut RFC 3501 aber nur als Substring, nicht exakt
+    // (z. B. Plus-Adressierung, Domain-Treffer, Zufallstreffer im Display-Namen)
+    // — der Server kann also UIDs liefern, die den Alias nur scheinbar treffen.
+    // Deshalb wird jede heruntergeladene Mail einzeln mit filterToAlias geprüft
+    // und nur bei echtem Treffer als \Seen markiert; Substring-Kollisionen werden
+    // verworfen und bleiben ungelesen, damit sie beim nächsten Poll erneut
+    // geladen und ggf. korrekt zugeordnet werden können.
     const alias = env.MAIL_ALIAS;
     const uids =
       (await client.search(
@@ -38,13 +45,16 @@ export async function fetchNewEmails(): Promise<IncomingEmail[]> {
       for await (const chunk of content) {
         chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
       }
-      parsed.push(await parseRawEmail(Buffer.concat(chunks)));
-      await client.messageFlagsAdd(String(uid), ["\\Seen"], { uid: true });
+      const mail = await parseRawEmail(Buffer.concat(chunks));
+      if (filterToAlias([mail], alias).length > 0) {
+        parsed.push(mail);
+        await client.messageFlagsAdd(String(uid), ["\\Seen"], { uid: true });
+      }
     }
   } finally {
     lock.release();
     await client.logout();
   }
 
-  return filterToAlias(parsed, env.MAIL_ALIAS);
+  return parsed;
 }
