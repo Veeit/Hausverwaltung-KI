@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { AUTH_COOKIE, getExpectedAuthCookie } from "@/lib/auth";
 
-export async function middleware(request: NextRequest): Promise<NextResponse> {
+export async function proxy(request: NextRequest): Promise<NextResponse> {
   // fail-closed: Ist kein brauchbares Passwort konfiguriert, liefert
   // getExpectedAuthCookie `null` statt sha256(""). Damit kann kein Cookie-Wert
   // jemals passen, egal was der Client mitschickt.
@@ -17,7 +17,7 @@ export const config = {
   // Exakter Pfadabgleich statt Präfix-Lookahead: "login" und "favicon.ico"
   // schliessen nur den jeweils exakten Pfad aus, "_next/" nur echte
   // Framework-Assets. Vorher schloss z.B. "login" jeden mit "login"
-  // BEGINNENDEN Pfad aus (z.B. "/loginXYZ", "/login-admin") von der
-  // Middleware aus, wodurch diese Pfade nie geprüft wurden.
+  // BEGINNENDEN Pfad aus (z.B. "/loginXYZ", "/login-admin") von diesem
+  // Proxy aus, wodurch diese Pfade nie geprüft wurden.
   matcher: ["/((?!login$|_next(?:/|$)|favicon\\.ico$).*)"],
 };

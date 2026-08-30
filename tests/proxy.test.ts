@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { afterEach, describe, expect, it } from "vitest";
 import { AUTH_COOKIE, sha256Hex } from "@/lib/auth";
-import { middleware } from "@/middleware";
+import { proxy } from "@/proxy";
 
 const ORIGINAL_DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD;
 
@@ -21,7 +21,7 @@ function requestWithCookie(cookieValue: string | undefined): NextRequest {
   return new NextRequest("http://localhost/", { headers });
 }
 
-describe("middleware (Zugriffsschutz, fail-closed)", () => {
+describe("proxy (Zugriffsschutz, fail-closed)", () => {
   afterEach(restoreEnv);
 
   it(
@@ -36,7 +36,7 @@ describe("middleware (Zugriffsschutz, fail-closed)", () => {
       );
 
       const request = requestWithCookie(publiclyKnownEmptyHash);
-      const response = await middleware(request);
+      const response = await proxy(request);
 
       expect(response.status).not.toBe(200);
       expect(response.headers.get("location")).toContain("/login");
@@ -48,7 +48,7 @@ describe("middleware (Zugriffsschutz, fail-closed)", () => {
     const publiclyKnownEmptyHash = await sha256Hex("");
 
     const request = requestWithCookie(publiclyKnownEmptyHash);
-    const response = await middleware(request);
+    const response = await proxy(request);
 
     expect(response.status).not.toBe(200);
     expect(response.headers.get("location")).toContain("/login");
@@ -57,7 +57,7 @@ describe("middleware (Zugriffsschutz, fail-closed)", () => {
   it("verweigert Zugriff ganz ohne Cookie, wenn DASHBOARD_PASSWORD leer ist", async () => {
     process.env.DASHBOARD_PASSWORD = "";
     const request = requestWithCookie(undefined);
-    const response = await middleware(request);
+    const response = await proxy(request);
 
     expect(response.status).not.toBe(200);
     expect(response.headers.get("location")).toContain("/login");
@@ -67,7 +67,7 @@ describe("middleware (Zugriffsschutz, fail-closed)", () => {
     process.env.DASHBOARD_PASSWORD = "korrektes-passwort";
     const hash = await sha256Hex("korrektes-passwort");
     const request = requestWithCookie(hash);
-    const response = await middleware(request);
+    const response = await proxy(request);
 
     // NextResponse.next() liefert Status 200 und leitet nicht um.
     expect(response.status).toBe(200);
@@ -76,7 +76,7 @@ describe("middleware (Zugriffsschutz, fail-closed)", () => {
   it("verweigert Zugriff mit falschem Cookie, wenn ein Passwort konfiguriert ist", async () => {
     process.env.DASHBOARD_PASSWORD = "korrektes-passwort";
     const request = requestWithCookie(await sha256Hex("falsches-passwort"));
-    const response = await middleware(request);
+    const response = await proxy(request);
 
     expect(response.status).not.toBe(200);
     expect(response.headers.get("location")).toContain("/login");
