@@ -214,6 +214,9 @@ npm run build    # Produktions-Build des Dashboards
   ist als Erweiterungspunkt vorhanden).
 - Mieter-Erkennung rein über die Absenderadresse; Handwerker-Zuordnung über
   den `[HV-…]`-Betreff-Tag.
+- Dokumenten-Upload (Dashboard → Dokumente) ist auf **8 MB** pro Datei
+  begrenzt (PDF, TXT, Markdown); darüber erscheint eine deutsche
+  Fehlermeldung statt eines rohen Framework-Fehlers.
 - Kill-Switch: Überschreitet der Mail-Ausgang `MAIL_RATE_LIMIT_PER_HOUR`,
   pausiert der Worker; im Dashboard erscheint ein roter Banner mit
   „Fortsetzen"-Button.

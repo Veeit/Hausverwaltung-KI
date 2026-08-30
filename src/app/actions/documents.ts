@@ -37,6 +37,14 @@ const ALLOWED_MIME_TYPES = new Set([
 ]);
 const GENERIC_MIME_TYPES = new Set(["", "application/octet-stream"]);
 
+// Next.js' Server-Action-Grenze (next.config.ts: bodySizeLimit) liegt bewusst
+// höher als dieses Limit: Eine Datei darüber soll an DIESER Prüfung mit einer
+// verständlichen deutschen Meldung scheitern, nicht als rohe englische
+// Framework-Fehlermeldung an der harten Obergrenze. 8 MB genügt für die hier
+// erwarteten Dokumenttypen (Hausordnung, Mietvertrag, FAQ als PDF/TXT/MD) mit
+// deutlichem Spielraum.
+const MAX_DOCUMENT_SIZE_BYTES = 8 * 1024 * 1024;
+
 function isAllowedDocumentType(filename: string, mimeType: string): boolean {
   const dotIndex = filename.lastIndexOf(".");
   const extension = dotIndex === -1 ? "" : filename.slice(dotIndex).toLowerCase();
@@ -54,6 +62,13 @@ export async function uploadDocument(formData: FormData): Promise<void> {
   if (!isAllowedDocumentType(file.name, file.type)) {
     throw new Error(
       "Nicht unterstützter Dateityp. Erlaubt sind nur PDF, TXT und Markdown (.pdf, .txt, .md, .markdown).",
+    );
+  }
+  if (file.size > MAX_DOCUMENT_SIZE_BYTES) {
+    const maxMb = (MAX_DOCUMENT_SIZE_BYTES / (1024 * 1024)).toFixed(0);
+    const fileMb = (file.size / (1024 * 1024)).toFixed(1);
+    throw new Error(
+      `Datei zu groß (${fileMb} MB). Erlaubt sind maximal ${maxMb} MB.`,
     );
   }
   const data = Buffer.from(await file.arrayBuffer());

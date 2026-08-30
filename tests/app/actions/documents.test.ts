@@ -110,6 +110,33 @@ describe("uploadDocument", () => {
     expect(db.select().from(documents).all()).toHaveLength(0);
     expect(searchDocuments("JFIF")).toEqual([]);
   });
+
+  // Review-Befund: Next.js' Standardlimit für Server Actions liegt bei 1 MB,
+  // next.config.ts hebt es projektweit an; uploadDocument prüft zusätzlich
+  // selbst mit einer eigenen, deutschen Meldung, damit ein zu großer Upload
+  // nicht an der harten Framework-Grenze mit einer rohen, englischen
+  // Fehlermeldung scheitert.
+  it("lehnt eine Datei über dem Größenlimit mit einer deutschen Meldung ab", async () => {
+    const oversized = Buffer.alloc(8 * 1024 * 1024 + 1, "a");
+    const file = new File([oversized], "riesige-hausordnung.txt", { type: "text/plain" });
+    const formData = new FormData();
+    formData.set("file", file);
+
+    await expect(uploadDocument(formData)).rejects.toThrow(/zu groß/);
+
+    expect(db.select().from(documents).all()).toHaveLength(0);
+  });
+
+  it("akzeptiert eine Datei knapp unterhalb des Größenlimits", async () => {
+    const nearLimit = Buffer.alloc(8 * 1024 * 1024 - 1, "a");
+    const file = new File([nearLimit], "grosse-hausordnung.txt", { type: "text/plain" });
+    const formData = new FormData();
+    formData.set("file", file);
+
+    await uploadDocument(formData);
+
+    expect(db.select().from(documents).all()).toHaveLength(1);
+  });
 });
 
 describe("removeDocument", () => {
