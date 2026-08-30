@@ -16,7 +16,11 @@ export const TICKET_TRANSITIONS: Record<TicketStatus, TicketStatus[]> = {
   genehmigt: ["handwerker_angefragt","eskaliert"],
   handwerker_angefragt: ["terminiert","eskaliert","erledigt"],
   terminiert: ["erledigt","eskaliert"],
-  eskaliert: ["infosammlung","wartet_auf_genehmigung","handwerker_angefragt","terminiert","erledigt"],
+  // "abgelehnt" ist Teil dieser Liste, damit rejectApproval() einen offenen
+  // Genehmigungsantrag auch dann noch ablehnen kann, wenn die KI zwischenzeitlich
+  // per ask_landlord eine Rückfrage gestellt und das Ticket dadurch nach
+  // "eskaliert" transitioniert hat (siehe Abschluss-Review, Punkt 4).
+  eskaliert: ["infosammlung","wartet_auf_genehmigung","handwerker_angefragt","terminiert","erledigt","abgelehnt"],
   abgelehnt: ["infosammlung","wartet_auf_genehmigung","erledigt"],
   erledigt: [],
 };

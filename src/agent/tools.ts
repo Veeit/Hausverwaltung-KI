@@ -298,6 +298,31 @@ export function buildAgentTools(ctx: AgentToolContext): AgentToolSpec[] {
         if (!canTransition(ticket.status as TicketStatus, "wartet_auf_genehmigung")) {
           return `FEHLER: Ungültiger Statuswechsel: ${ticket.status} → wartet_auf_genehmigung`;
         }
+        // Höchstens ein offener Antrag pro Ticket: Über den Eskalations-Rückweg
+        // (wartet_auf_genehmigung → eskaliert → erneut wartet_auf_genehmigung,
+        // beides laut TICKET_TRANSITIONS erlaubt) könnte sonst ein ZWEITER
+        // offener Antrag zum selben Ticket entstehen. Wird einer der beiden
+        // genehmigt, ist der andere endgültig unentscheidbar (approveApproval/
+        // rejectApproval prüfen jeweils nur den einen übergebenen Antrag).
+        // Der alte, jetzt überholte Antrag wird deshalb ersetzt statt zusätzlich
+        // offen zu bleiben — die KI ruft request_approval typischerweise erneut
+        // auf, weil sich nach einer Vermieter-Antwort etwas geändert hat
+        // (anderer Handwerker, aktualisierte Details).
+        const staleOpenApprovals = db
+          .select({ id: approvals.id })
+          .from(approvals)
+          .where(and(eq(approvals.ticketId, ticketId), eq(approvals.status, "offen")))
+          .all();
+        for (const stale of staleOpenApprovals) {
+          db.update(approvals)
+            .set({
+              status: "abgelehnt",
+              decisionNote: "Automatisch ersetzt durch einen neuen Genehmigungsantrag der KI.",
+              decidedAt: new Date().toISOString(),
+            })
+            .where(eq(approvals.id, stale.id))
+            .run();
+        }
         const { id: approvalId } = db
           .insert(approvals)
           .values({

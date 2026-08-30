@@ -205,6 +205,29 @@ describe("approveApproval", () => {
     expect(decided?.status).toBe("genehmigt");
   });
 
+  // Review-Befund Punkt 4: Stellt die KI während der Wartezeit eine Rückfrage
+  // (ask_landlord setzt das Ticket automatisch auf "eskaliert"), muss der
+  // Antrag trotzdem noch genehmigbar sein — sonst ist er unentscheidbar,
+  // obwohl er unverändert mit rotem Zähler im Dashboard steht.
+  it("genehmigt auch aus dem Status eskaliert heraus und sendet die Handwerker-Mail", async () => {
+    const { ticket, contractor, approval } = seed("eskaliert");
+
+    await approveApproval(approval.id);
+
+    const updatedTicket = db.select().from(tickets).where(eq(tickets.id, ticket.id)).get();
+    expect(updatedTicket?.status).toBe("handwerker_angefragt");
+    expect(updatedTicket?.contractorId).toBe(contractor.id);
+
+    const updatedApproval = db
+      .select()
+      .from(approvals)
+      .where(eq(approvals.id, approval.id))
+      .get();
+    expect(updatedApproval?.status).toBe("genehmigt");
+
+    expect(sendSmtp).toHaveBeenCalledTimes(1);
+  });
+
   it("stellt den Zustand her, den das Agent-Werkzeug send_reply für Handwerker-Mails voraussetzt", async () => {
     // send_reply (src/agent/tools.ts) lässt E-Mails an den Handwerker nur zu,
     // wenn GENAU diese Kombination existiert: eine approvals-Zeile mit
@@ -323,13 +346,40 @@ describe("rejectApproval", () => {
     await expect(rejectApproval(approval.id, "Egal")).rejects.toThrow();
   });
 
-  it("bricht ab, wenn das Ticket zwischenzeitlich in einen Status gewechselt hat, aus dem heraus 'abgelehnt' kein gültiger Übergang ist, und lässt den Antrag bearbeitbar", async () => {
-    // Szenario: Zwischen Antragstellung und Vermieter-Klick hat die KI eine
-    // Rückfrage gestellt und das Ticket nach "eskaliert" transitioniert (ein
-    // regulärer Übergang aus "wartet_auf_genehmigung"). Aus "eskaliert" heraus
-    // ist "abgelehnt" laut TICKET_TRANSITIONS kein gültiges Ziel mehr.
+  // Review-Befund Punkt 4: Stellt die KI während der Wartezeit eine Rückfrage
+  // (ask_landlord), wechselt das Ticket automatisch nach "eskaliert" — ein
+  // offener Antrag muss auch dann noch ablehnbar bleiben, sonst steht er
+  // unentscheidbar mit rotem Zähler dauerhaft im Dashboard.
+  it("lehnt einen Antrag auch dann ab, wenn das Ticket zwischenzeitlich nach 'eskaliert' gewechselt hat", async () => {
     const { conv, ticket, approval } = seed();
     transitionTicket(ticket.id, "eskaliert");
+
+    await rejectApproval(approval.id, "Zu teuer, bitte erst einen Kostenvoranschlag einholen");
+
+    const updatedApproval = db
+      .select()
+      .from(approvals)
+      .where(eq(approvals.id, approval.id))
+      .get();
+    expect(updatedApproval?.status).toBe("abgelehnt");
+
+    const updatedTicket = db.select().from(tickets).where(eq(tickets.id, ticket.id)).get();
+    expect(updatedTicket?.status).toBe("abgelehnt");
+
+    const synthetic = db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, conv.id))
+      .all();
+    expect(synthetic).toHaveLength(1);
+  });
+
+  it("bricht ab, wenn das Ticket in einem Status steht, aus dem heraus 'abgelehnt' kein gültiger Übergang ist, und lässt den Antrag bearbeitbar", async () => {
+    // "genehmigt" ist weder aus wartet_auf_genehmigung noch aus eskaliert
+    // erreichbares Ziel für "abgelehnt" — der Guard muss weiterhin für jeden
+    // sonstigen Status greifen, nicht pauschal für alle Status geöffnet werden.
+    const { conv, ticket, approval } = seed();
+    transitionTicket(ticket.id, "genehmigt");
 
     await expect(
       rejectApproval(approval.id, "Zu teuer, bitte erst einen Kostenvoranschlag einholen"),
@@ -346,7 +396,7 @@ describe("rejectApproval", () => {
     expect(unchangedApproval?.status).toBe("offen");
 
     const unchangedTicket = db.select().from(tickets).where(eq(tickets.id, ticket.id)).get();
-    expect(unchangedTicket?.status).toBe("eskaliert");
+    expect(unchangedTicket?.status).toBe("genehmigt");
 
     const synthetic = db
       .select()

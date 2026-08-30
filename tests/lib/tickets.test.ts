@@ -66,6 +66,10 @@ describe("canTransition", () => {
     ["handwerker_angefragt", "terminiert"],
     ["terminiert", "erledigt"],
     ["eskaliert", "terminiert"],
+    // Review-Befund Punkt 4: eskaliert → abgelehnt muss erlaubt sein, damit
+    // rejectApproval() einen offenen Antrag noch ablehnen kann, wenn die KI
+    // zwischenzeitlich per ask_landlord eine Rückfrage gestellt hat.
+    ["eskaliert", "abgelehnt"],
     ["abgelehnt", "infosammlung"],
   ] as Array<[TicketStatus, TicketStatus]>)("erlaubt %s → %s", (from, to) => {
     expect(canTransition(from, to)).toBe(true);

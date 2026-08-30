@@ -370,6 +370,55 @@ describe("request_approval", () => {
       .get();
     expect(ticket!.status).toBe("neu");
   });
+
+  // Review-Befund Punkt 4: Über den Eskalations-Rückweg (wartet_auf_genehmigung
+  // → eskaliert → erneut wartet_auf_genehmigung) konnte request_approval bisher
+  // ein ZWEITES Mal aufgerufen werden, während der erste Antrag noch "offen"
+  // war — zwei parallel offene Anträge zum selben Ticket. Wurde einer davon
+  // genehmigt, blieb der andere für immer unentscheidbar. Der alte Antrag muss
+  // stattdessen automatisch ersetzt (auf "abgelehnt" gesetzt) werden.
+  it("ersetzt einen bereits offenen Antrag durch einen neuen, statt einen zweiten offenen Antrag zum selben Ticket zuzulassen", async () => {
+    const ticketId = makeRepairTicket(fixture);
+    const ctx = makeCtx(fixture, { ticketId });
+    const tools = buildAgentTools(ctx);
+
+    const first = await getTool(tools, "request_approval").run({
+      summary: "Erster Entwurf",
+      contractorId: fixture.contractorId,
+      emailSubject: "Reparaturauftrag",
+      emailBody: "Erster Entwurf-Text.",
+    });
+    expect(first.startsWith("FEHLER")).toBe(false);
+    const firstApprovalId = db.select().from(approvals).all()[0]!.id;
+
+    const escalate = await getTool(tools, "ask_landlord").run({
+      question: "Welcher Handwerker soll es sein?",
+    });
+    expect(escalate.startsWith("FEHLER")).toBe(false);
+    expect(
+      db.select().from(tickets).where(eq(tickets.id, ticketId)).get()!.status,
+    ).toBe("eskaliert");
+
+    const second = await getTool(tools, "request_approval").run({
+      summary: "Zweiter Entwurf nach Vermieter-Rückmeldung",
+      contractorId: fixture.contractorId,
+      emailSubject: "Reparaturauftrag (aktualisiert)",
+      emailBody: "Zweiter Entwurf-Text.",
+    });
+    expect(second.startsWith("FEHLER")).toBe(false);
+
+    const all = db.select().from(approvals).where(eq(approvals.ticketId, ticketId)).all();
+    expect(all).toHaveLength(2);
+    const superseded = all.find((a) => a.id === firstApprovalId)!;
+    expect(superseded.status).toBe("abgelehnt");
+    expect(superseded.decisionNote).toContain("ersetzt");
+    const open = all.filter((a) => a.status === "offen");
+    expect(open).toHaveLength(1);
+    expect(open[0]!.summary).toBe("Zweiter Entwurf nach Vermieter-Rückmeldung");
+
+    const ticket = db.select().from(tickets).where(eq(tickets.id, ticketId)).get()!;
+    expect(ticket.status).toBe("wartet_auf_genehmigung");
+  });
 });
 
 describe("ask_landlord", () => {

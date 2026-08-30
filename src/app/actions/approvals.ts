@@ -44,9 +44,18 @@ export async function approveApproval(approvalId: number): Promise<void> {
   // bereits auf "genehmigt", der Antrag aber noch auf "offen". Ohne diesen
   // zweiten erlaubten Zustand wäre der Vorgang danach dauerhaft blockiert —
   // der zweite Klick würde abgelehnt und die Handwerker-Mail nie rausgehen.
-  if (ticket.status !== "wartet_auf_genehmigung" && ticket.status !== "genehmigt") {
+  //
+  // "eskaliert" ist ein dritter gültiger Startzustand (Review-Befund Punkt 4):
+  // Stellt die KI während der Wartezeit eine Rückfrage (ask_landlord setzt das
+  // Ticket automatisch auf "eskaliert"), wäre der Antrag sonst weder genehmigbar
+  // noch ablehnbar, obwohl er unentschieden im Dashboard steht.
+  if (
+    ticket.status !== "wartet_auf_genehmigung" &&
+    ticket.status !== "genehmigt" &&
+    ticket.status !== "eskaliert"
+  ) {
     throw new Error(
-      `Ticket ${ticket.id} ist weder im Status "wartet_auf_genehmigung" noch "genehmigt" (aktuell: "${ticket.status}").`,
+      `Ticket ${ticket.id} ist weder im Status "wartet_auf_genehmigung" noch "genehmigt" noch "eskaliert" (aktuell: "${ticket.status}").`,
     );
   }
   const contractor = db
@@ -80,6 +89,12 @@ export async function approveApproval(approvalId: number): Promise<void> {
   }
 
   try {
+    // Zwischenstation "genehmigt" nur, wenn der Ausgangsstatus das erfordert:
+    // wartet_auf_genehmigung → genehmigt ist der einzige direkte Weg dorthin.
+    // Aus "eskaliert" heraus ist "handwerker_angefragt" laut TICKET_TRANSITIONS
+    // dagegen bereits direkt erreichbar (kein Umweg über "genehmigt" nötig,
+    // der dort auch gar nicht erlaubt wäre) — der abschließende
+    // transitionTicket(..., "handwerker_angefragt") weiter unten übernimmt das.
     if (ticket.status === "wartet_auf_genehmigung") {
       transitionTicket(ticket.id, "genehmigt");
     }
@@ -135,18 +150,20 @@ export async function rejectApproval(approvalId: number, note: string): Promise<
     throw new Error(`Ticket ${approval.ticketId} nicht gefunden.`);
   }
   // Spiegelbild des Guards in approveApproval: Der Ticket-Status wird VOR
-  // jedem Schreibzugriff geprüft. "abgelehnt" ist laut TICKET_TRANSITIONS nur
-  // aus "wartet_auf_genehmigung" heraus ein gültiges Ziel. Ohne diese Prüfung
-  // würde transitionTicket weiter unten erst NACH dem approvals-Update
-  // werfen (z. B. wenn das Ticket zwischenzeitlich nach "eskaliert" gewechselt
-  // ist, weil die KI eine Rückfrage gestellt hat) — der Antrag bliebe dann
-  // unwiderruflich auf "abgelehnt" stehen, ohne dass der Mieter je über die
-  // synthetische Nachricht informiert wird.
-  if (ticket.status !== "wartet_auf_genehmigung") {
+  // jedem Schreibzugriff geprüft. "abgelehnt" ist laut TICKET_TRANSITIONS aus
+  // "wartet_auf_genehmigung" ODER "eskaliert" heraus ein gültiges Ziel (Review-
+  // Befund Punkt 4: Stellt die KI während der Wartezeit eine Rückfrage,
+  // wechselt das Ticket automatisch nach "eskaliert" — der Antrag muss auch
+  // dann noch ablehnbar bleiben, sonst steht er unentscheidbar im Dashboard).
+  // Jeder andere Status wird weiterhin VOR jedem Schreibzugriff abgelehnt:
+  // würde transitionTicket weiter unten erst NACH dem approvals-Update werfen,
+  // bliebe der Antrag unwiderruflich auf "abgelehnt" stehen, ohne dass der
+  // Mieter je über die synthetische Nachricht informiert wird.
+  if (ticket.status !== "wartet_auf_genehmigung" && ticket.status !== "eskaliert") {
     throw new Error(
-      `Ticket ${ticket.id} ist nicht mehr im Status "wartet_auf_genehmigung" (aktuell: "${ticket.status}") ` +
-        `und kann daher nicht abgelehnt werden. Der Antrag bleibt offen — bitte Ticket ${buildTicketTag(ticket.id)} ` +
-        `zunächst dort prüfen und die Ablehnung danach erneut versuchen.`,
+      `Ticket ${ticket.id} ist nicht mehr im Status "wartet_auf_genehmigung" oder "eskaliert" ` +
+        `(aktuell: "${ticket.status}") und kann daher nicht abgelehnt werden. Der Antrag bleibt offen ` +
+        `— bitte Ticket ${buildTicketTag(ticket.id)} zunächst dort prüfen und die Ablehnung danach erneut versuchen.`,
     );
   }
 
