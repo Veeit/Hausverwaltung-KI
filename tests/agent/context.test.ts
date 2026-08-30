@@ -245,6 +245,12 @@ describe("loadTriggerInfo", () => {
           type: "reparatur",
           status: "handwerker_angefragt",
           title: "Türschloss defekt",
+          // contractorId gesetzt: dieser Handwerker ist für das Ticket
+          // beauftragt (realistisches Ergebnis von approveApproval). Ohne
+          // diesen Beleg der Beauftragung verwirft resolveAuthorizedTaggedTicketId
+          // den Betreff-Tag jetzt (Critical-Befund aus dem Abschluss-Review) —
+          // siehe den Negativ-Test direkt im Anschluss.
+          contractorId,
         })
         .run().lastInsertRowid,
     );
@@ -263,6 +269,111 @@ describe("loadTriggerInfo", () => {
     expect(trigger.contractor?.id).toBe(contractorId);
     expect(trigger.tenant?.name).toBe("Max Mustermann");
     expect(trigger.tenant?.propertyAddress).toBe("Musterstraße 1, 20095 Hamburg");
+  });
+
+  // Critical-Befund aus dem Abschluss-Review: Ein Handwerker, der NICHT für
+  // dieses Ticket beauftragt ist, nennt trotzdem dessen Betreff-Tag (z.B.
+  // erraten oder aus einer alten Mail). Ohne Berechtigungsprüfung würde er den
+  // kompletten Ticket-Datensatz (inkl. Mieter-Name, -Adresse, gesammelter
+  // Infos) in den KI-Kontext bekommen und könnte ihn über update_ticket
+  // verändern.
+  it("contractor_message: fremdes Ticket wird trotz korrektem Betreff-Tag NICHT zugeordnet (Handwerker nicht beauftragt)", () => {
+    const { tenantId, conversationId } = seedTenantWorld();
+    const contractorId = Number(
+      db
+        .insert(contractors)
+        .values({ name: "Sven Schloss", email: "sven.schloss@example.com", trade: "Schlüsseldienst" })
+        .run().lastInsertRowid,
+    );
+    const contractorConvId = Number(
+      db
+        .insert(conversations)
+        .values({
+          counterpartType: "contractor",
+          counterpartId: contractorId,
+          counterpartEmail: "sven.schloss@example.com",
+        })
+        .run().lastInsertRowid,
+    );
+    // Ticket gehört einem anderen Mieter/Handwerker — kein contractorId-Match,
+    // keine genehmigte approvals-Zeile für diesen Handwerker.
+    const foreignTicketId = Number(
+      db
+        .insert(tickets)
+        .values({
+          tenantId,
+          conversationId,
+          type: "reparatur",
+          status: "neu",
+          title: "Heizung defekt",
+          summary: "Vertrauliche Details zum Mieter",
+        })
+        .run().lastInsertRowid,
+    );
+    const msgId = insertMessage({
+      conversationId: contractorConvId,
+      role: "contractor",
+      fromEmail: "sven.schloss@example.com",
+      subject: `Re: Anfrage [HV-${foreignTicketId}]`,
+      body: "Ich kann Dienstag 10 Uhr.",
+    });
+
+    const trigger = loadTriggerInfo(msgId);
+
+    expect(trigger.kind).toBe("contractor_message");
+    expect(trigger.ticket).toBeNull();
+    // Kein Mieter-Bezug über das fremde Ticket — sensible Mieterdaten
+    // (Name, Objektadresse, summary) dürfen NICHT in den Kontext gelangen.
+    expect(trigger.tenant).toBeNull();
+    expect(trigger.contractor?.id).toBe(contractorId);
+  });
+
+  // Kernszenario aus dem Review: Mieterin Anna hat Ticket HV-n mit sensiblen
+  // Angaben; Mieter Bert schreibt mit Annas Tag im Betreff. Ohne
+  // Berechtigungsprüfung würde Bert Annas kompletten Ticket-Datensatz
+  // (inkl. summary/collectedInfo) in den KI-Kontext bekommen und könnte ihn
+  // über update_ticket verändern (z.B. auf "erledigt" setzen).
+  it("tenant_message: fremdes Ticket eines anderen Mieters wird trotz korrektem Betreff-Tag NICHT zugeordnet", () => {
+    const { propertyId, tenantId: annaTenantId, conversationId: annaConversationId } = seedTenantWorld();
+    const annaTicketId = Number(
+      db
+        .insert(tickets)
+        .values({
+          tenantId: annaTenantId,
+          conversationId: annaConversationId,
+          type: "reparatur",
+          status: "infosammlung",
+          title: "Vertretersuche",
+          summary: "tagsüber nie zuhause, Schlüssel unter der Matte",
+        })
+        .run().lastInsertRowid,
+    );
+    const bertId = Number(
+      db
+        .insert(tenants)
+        .values({ name: "Bert Mieter", email: "bert@example.com", propertyId })
+        .run().lastInsertRowid,
+    );
+    const bertConvId = Number(
+      db
+        .insert(conversations)
+        .values({ counterpartType: "tenant", counterpartId: bertId, counterpartEmail: "bert@example.com" })
+        .run().lastInsertRowid,
+    );
+    const msgId = insertMessage({
+      conversationId: bertConvId,
+      role: "tenant",
+      fromEmail: "bert@example.com",
+      subject: `Re: [HV-${annaTicketId}]`,
+      body: "Hallo, was ist mit meinem Anliegen?",
+    });
+
+    const trigger = loadTriggerInfo(msgId);
+
+    expect(trigger.kind).toBe("tenant_message");
+    expect(trigger.ticket).toBeNull();
+    // Bert bekommt seinen EIGENEN Mieter-Kontext, nicht Annas Ticket-Daten.
+    expect(trigger.tenant?.email).toBe("bert@example.com");
   });
 
   it("landlord_answer: kind + Mieter über ticketId", () => {

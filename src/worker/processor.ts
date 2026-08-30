@@ -2,12 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { and, asc, eq, lt, ne } from "drizzle-orm";
 import { getDb } from "@/db/client";
-import { attachments, contractors, messages, tenants, tickets } from "@/db/schema";
+import { attachments, contractors, messages, tenants } from "@/db/schema";
 import { getEnv } from "@/env";
 import type { IncomingEmail } from "@/channel/types";
 import { fetchNewEmails, markEmailsSeen, type FetchedEmail } from "@/channel/imap";
 import { findOrCreateConversation, touchConversation } from "@/lib/conversations";
-import { extractTicketId } from "@/lib/subject";
+import { resolveAuthorizedTaggedTicketId } from "@/lib/ticketAccess";
 import { isWorkerPaused } from "@/lib/rateLimit";
 import { runAgentOnMessage, type AgentRunDeps } from "@/agent/run";
 
@@ -93,16 +93,16 @@ export async function ingestEmail(mail: IncomingEmail): Promise<number | null> {
     counterpartId,
     subject: mail.subject,
   });
-  const taggedTicketId = extractTicketId(mail.subject);
-  let ticketId: number | null = null;
-  if (taggedTicketId !== null) {
-    const ticket = db
-      .select({ id: tickets.id })
-      .from(tickets)
-      .where(eq(tickets.id, taggedTicketId))
-      .get();
-    ticketId = ticket ? ticket.id : null;
-  }
+  // Betreff-Tag [HV-n] nur übernehmen, wenn der Absender tatsächlich zu diesem
+  // Vorgang gehört (siehe resolveAuthorizedTaggedTicketId) — sonst könnte jeder
+  // Mieter/Handwerker über einen erratenen oder alten Tag fremde Vorgänge lesen
+  // und via update_ticket verändern (Critical-Befund aus dem Abschluss-Review).
+  const ticketId = resolveAuthorizedTaggedTicketId({
+    subject: mail.subject,
+    role,
+    fromEmail: from,
+    conversationId,
+  });
 
   // 4. Message persistieren (Spec: erst persistieren, dann verarbeiten).
   //    Unbekannte Absender werden nie beantwortet → direkt 'done'.

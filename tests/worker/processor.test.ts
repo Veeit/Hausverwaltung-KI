@@ -202,6 +202,79 @@ describe("ingestEmail", () => {
     expect(msg.ticketId).toBeNull();
   });
 
+  // Critical-Befund aus dem Abschluss-Review: Ein fremder Mieter nennt im
+  // Betreff den Tag eines Tickets, das nicht ihm gehört (erraten oder aus
+  // einer alten Mail bekannt). Ohne Berechtigungsprüfung würde die Nachricht
+  // dem fremden Ticket zugeordnet — der komplette Ticket-Datensatz (inkl.
+  // sensibler summary/collectedInfo) landete dann im KI-Kontext, und über
+  // update_ticket könnte der fremde Mieter den Vorgang sogar verändern.
+  it("ordnet den [HV-id]-Betreff-Tag NICHT zu, wenn der Absender nicht der Mieter dieses Tickets ist", async () => {
+    const tenantId = seedTenant();
+    const conversationId = findOrCreateConversation({
+      email: "max.mustermann@example.com",
+      counterpartType: "tenant",
+      counterpartId: tenantId,
+    });
+    const ticketId = createTicket({
+      tenantId,
+      conversationId,
+      type: "reparatur",
+      title: "Vertretersuche",
+    });
+    const fremderTenant = db
+      .insert(tenants)
+      .values({
+        name: "Fremde Mieterin",
+        email: "fremd.mieterin@example.com",
+        propertyId: db.select().from(properties).all()[0]!.id,
+      })
+      .returning({ id: tenants.id })
+      .get();
+    void fremderTenant;
+
+    const id = await ingestEmail(
+      makeMail({
+        from: "fremd.mieterin@example.com",
+        subject: `Re: [HV-${ticketId}]`,
+        messageId: "<msg-fremdes-ticket@example.com>",
+      }),
+    );
+
+    const msg = db.select().from(messages).where(eq(messages.id, id!)).get()!;
+    expect(msg.role).toBe("tenant");
+    expect(msg.ticketId).toBeNull();
+  });
+
+  // Gegenstück: ein Handwerker, der für dieses Ticket nicht beauftragt ist,
+  // nennt trotzdem dessen Tag — auch das darf keine Zuordnung ergeben.
+  it("ordnet den [HV-id]-Betreff-Tag NICHT zu, wenn der Handwerker für dieses Ticket nicht beauftragt ist", async () => {
+    const tenantId = seedTenant();
+    const conversationId = findOrCreateConversation({
+      email: "max.mustermann@example.com",
+      counterpartType: "tenant",
+      counterpartId: tenantId,
+    });
+    const ticketId = createTicket({
+      tenantId,
+      conversationId,
+      type: "reparatur",
+      title: "Heizung defekt",
+    });
+    seedContractor(); // klaus.rohr@example.com — für DIESES Ticket nicht beauftragt
+
+    const id = await ingestEmail(
+      makeMail({
+        from: "klaus.rohr@example.com",
+        subject: `Re: [HV-${ticketId}]`,
+        messageId: "<msg-fremder-handwerker@example.com>",
+      }),
+    );
+
+    const msg = db.select().from(messages).where(eq(messages.id, id!)).get()!;
+    expect(msg.role).toBe("contractor");
+    expect(msg.ticketId).toBeNull();
+  });
+
   it("legt Anhänge unter ATTACHMENTS_DIR/<messageId>/<sanitized> ab und schreibt die attachments-Row", async () => {
     seedTenant();
     const content = Buffer.from("fake-jpeg-daten");

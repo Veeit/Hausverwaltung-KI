@@ -15,7 +15,7 @@ import {
   type TenantRow,
   type TicketRow,
 } from "@/db/schema";
-import { extractTicketId } from "@/lib/subject";
+import { resolveAuthorizedTaggedTicketId } from "@/lib/ticketAccess";
 
 export type AgentKind = "tenant_message" | "contractor_message" | "landlord_answer";
 
@@ -82,9 +82,16 @@ export function loadTriggerInfo(messageId: number): TriggerInfo {
     ticket = db.select().from(tickets).where(eq(tickets.id, message.ticketId)).get() ?? null;
   }
   if (!ticket) {
-    const taggedId = extractTicketId(message.subject);
-    if (taggedId != null) {
-      ticket = db.select().from(tickets).where(eq(tickets.id, taggedId)).get() ?? null;
+    // Wie beim Ingest (src/worker/processor.ts): der Betreff-Tag wird nur
+    // übernommen, wenn der Absender tatsächlich zu diesem Vorgang gehört.
+    const authorizedTaggedId = resolveAuthorizedTaggedTicketId({
+      subject: message.subject,
+      role: message.role,
+      fromEmail: message.fromEmail,
+      conversationId: message.conversationId,
+    });
+    if (authorizedTaggedId != null) {
+      ticket = db.select().from(tickets).where(eq(tickets.id, authorizedTaggedId)).get() ?? null;
     }
   }
   if (!ticket && message.role === "tenant") {
