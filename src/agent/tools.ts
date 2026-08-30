@@ -1,4 +1,5 @@
-import { z } from "zod";
+// betaZodTool erwartet v4-Schemata; ein v3-Schema führt zu einem Laufzeit-TypeError.
+import { z } from "zod/v4";
 import { and, eq } from "drizzle-orm";
 import { getDb } from "@/db/client";
 import { approvals, contractors, escalations, messages, tickets } from "@/db/schema";

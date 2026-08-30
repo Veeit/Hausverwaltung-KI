@@ -27,6 +27,10 @@ export interface TriggerInfo {
   ticket: TicketRow | null;
 }
 
+// Die einzigen von Claude unterstützten Bild-MIME-Typen (siehe API-Doku); alle anderen
+// image/*-Typen (z.B. image/heic von iPhone-Fotos oder image/svg+xml) werden abgelehnt.
+const SUPPORTED_IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
+
 const ROLE_LABELS: Record<string, string> = {
   tenant: "Mieter",
   contractor: "Handwerker",
@@ -148,7 +152,10 @@ export function buildUserContent(trigger: TriggerInfo): Anthropic.Beta.BetaConte
   ];
   const files = db.select().from(attachments).where(eq(attachments.messageId, message.id)).all();
   for (const file of files) {
-    if (!file.mimeType.startsWith("image/")) continue;
+    // Claude unterstützt nur diese vier Bild-MIME-Typen; alles andere (z.B. HEIC-Fotos
+    // von iPhones oder SVGs) würde die API mit HTTP 400 scheitern lassen, obwohl es mit
+    // "image/" beginnt. Solche Anhänge werden wie Nicht-Bilder übersprungen.
+    if (!SUPPORTED_IMAGE_MIME_TYPES.has(file.mimeType)) continue;
     blocks.push({
       type: "image",
       source: {

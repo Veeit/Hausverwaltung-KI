@@ -255,7 +255,7 @@ describe("runAgentOnMessage", () => {
     expect(db.select().from(escalations).all()).toHaveLength(0);
   });
 
-  it("Handwerker-Termin außerhalb der Mieter-Zeitfenster → ask_landlord, Ticket bleibt handwerker_angefragt", async () => {
+  it("Handwerker-Termin außerhalb der Mieter-Zeitfenster → ask_landlord, Ticket wird eskaliert", async () => {
     // Spec §5.5, Fall B: Der Vorschlag passt nicht — die KI entscheidet das
     // nicht selbst, sondern eskaliert an den Vermieter.
     const { tenantId, conversationId } = seedTenantWorld();
@@ -322,6 +322,10 @@ describe("runAgentOnMessage", () => {
 
     // Die "keine Antwort"-Regel gilt nur für tenant_message — hier keine Zusatz-Eskalation
     expect(esc.every((e) => !e.question.includes("keine Antwort gesendet"))).toBe(true);
+
+    // Explizite Negativ-Prüfung: Es ist keine ausgehende Nachricht entstanden
+    // (bisher nur indirekt daraus geschlossen, dass der Mock send_reply nicht aufruft).
+    expect(db.select().from(messages).where(eq(messages.direction, "outbound")).all()).toHaveLength(0);
   });
 
   it("stopReason 'refusal' → Refusal-Eskalation, Message trotzdem done", async () => {

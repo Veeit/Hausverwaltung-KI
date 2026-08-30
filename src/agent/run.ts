@@ -28,7 +28,7 @@ async function defaultRunTools({ system, content, toolSpecs }: RunToolsParams): 
     fallbacks: [{ model: "claude-opus-4-8" }],
     max_iterations: 16,
     system,
-    tools: toolSpecs.map((s) => betaZodTool({ name: s.name, description: s.description, inputSchema: s.inputSchema as never, run: s.run })),
+    tools: toolSpecs.map((s) => betaZodTool({ name: s.name, description: s.description, inputSchema: s.inputSchema, run: s.run })),
     messages: [{ role: "user", content }],
   });
   return { stopReason: finalMessage.stop_reason };

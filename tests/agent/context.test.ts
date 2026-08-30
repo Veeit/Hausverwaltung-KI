@@ -354,4 +354,42 @@ describe("buildUserContent", () => {
     expect(img.source.media_type).toBe("image/png");
     expect(img.source.data).toBe(png.toString("base64"));
   });
+
+  it("überspringt Bild-Anhänge mit von Claude nicht unterstütztem MIME-Typ (z.B. HEIC, SVG)", () => {
+    // Claude unterstützt nur image/jpeg, image/png, image/gif und image/webp. Ein
+    // iPhone-Foto im HEIC-Format oder ein SVG beginnt zwar auch mit "image/", würde
+    // die API aber mit HTTP 400 scheitern lassen. Solche Anhänge müssen wie
+    // Nicht-Bilder übersprungen werden — die Datei darf dabei nie gelesen werden,
+    // der Pfad ist deshalb bewusst fiktiv.
+    const { conversationId } = seedTenantWorld();
+    const msgId = insertMessage({
+      conversationId,
+      role: "tenant",
+      subject: "Foto",
+      body: "Anbei ein Foto vom Schloss.",
+    });
+    db.insert(attachments)
+      .values({
+        messageId: msgId,
+        filename: "foto.heic",
+        mimeType: "image/heic",
+        filePath: "/nicht/vorhanden/foto.heic",
+        size: 3,
+      })
+      .run();
+    db.insert(attachments)
+      .values({
+        messageId: msgId,
+        filename: "schema.svg",
+        mimeType: "image/svg+xml",
+        filePath: "/nicht/vorhanden/schema.svg",
+        size: 3,
+      })
+      .run();
+
+    const content = buildUserContent(loadTriggerInfo(msgId));
+
+    expect(content).toHaveLength(1);
+    expect(content[0].type).toBe("text");
+  });
 });
