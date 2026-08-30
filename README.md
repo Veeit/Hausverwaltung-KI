@@ -93,7 +93,7 @@ Dann die Werte eintragen:
 | `ANTHROPIC_API_KEY` | Anthropic API Key (Pflicht) | `sk-ant-…` |
 | `MAIL_USER` | Fastmail-Login (Haupt-Adresse) | `ich@fastmail.com` |
 | `MAIL_PASSWORD` | Fastmail-**App-Passwort** (nicht das Kontopasswort) | — |
-| `MAIL_ALIAS` | Dedizierter Alias: Eingangsfilter + Absenderadresse | `hausverwaltung@…` |
+| `MAIL_ALIAS` | Dedizierter Alias: Eingangsfilter + Absenderadresse — **vollständige Adresse, nicht nur der Namensteil vor dem @!** | `hausverwaltung-tool@ihre-domain.de` |
 | `DASHBOARD_PASSWORD` | Passwort für das Dashboard-Login | — |
 | `IMAP_HOST` / `IMAP_PORT` | IMAP-Server | `imap.fastmail.com` / `993` |
 | `SMTP_HOST` / `SMTP_PORT` | SMTP-Server | `smtp.fastmail.com` / `465` |
