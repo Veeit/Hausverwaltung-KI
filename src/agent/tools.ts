@@ -39,6 +39,13 @@ export interface AgentToolContext {
   // per `!ctx.repliedToContractor`, wofür `undefined` bereits "nicht gesendet"
   // bedeutet.
   repliedToContractor?: boolean;
+  // mutable: ask_landlord setzt true. Wird vom Sicherheitsnetz für
+  // contractor_message in runAgentOnMessage genutzt, damit eine Handwerker-
+  // Nachricht, auf die die KI bewusst mit einer Rückfrage an den Vermieter
+  // reagiert (statt zu antworten), NICHT fälschlich als "keine Antwort"
+  // eskaliert wird — anders als bei tenant_message erwartet der Ablauf hier
+  // keinen zusätzlichen Zwischenbescheid an den Handwerker.
+  escalated?: boolean;
   sendFn?: typeof sendSmtp; // Test-Injektion, an sendAndLogEmail durchgereicht
 }
 
@@ -343,6 +350,7 @@ export function buildAgentTools(ctx: AgentToolContext): AgentToolSpec[] {
             transitionTicket(ctx.ticketId, "eskaliert");
           }
         }
+        ctx.escalated = true;
         return `Rückfrage #${escalationId} an den Vermieter gestellt; seine Antwort erreicht dich später als neue Nachricht. Sende dem Mieter jetzt einen Zwischenbescheid via send_reply.`;
       },
     },

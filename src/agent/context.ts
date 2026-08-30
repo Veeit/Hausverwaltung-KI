@@ -1,8 +1,9 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { readFileSync } from "node:fs";
-import { and, desc, eq, ne } from "drizzle-orm";
+import { and, desc, eq, isNotNull, ne, or } from "drizzle-orm";
 import { getDb } from "@/db/client";
 import {
+  approvals,
   attachments,
   contractors,
   conversations,
@@ -65,6 +66,40 @@ function loadTenantByEmail(email: string): (TenantRow & { propertyAddress: strin
   return row ? { ...row.tenant, propertyAddress: row.propertyAddress } : null;
 }
 
+/**
+ * Rückfall für einen Handwerker, der ohne (oder mit fremdem, verworfenem)
+ * Betreff-Tag schreibt: jüngstes nicht-erledigtes Ticket, für das GENAU dieser
+ * Handwerker tatsächlich beauftragt ist — spiegelt exakt die
+ * Berechtigungsprüfung aus resolveAuthorizedTaggedTicketId (tickets.contractorId
+ * ODER eine genehmigte approvals-Zeile). Ohne diese Einschränkung könnte der
+ * Rückfall die Berechtigungsprüfung aus Punkt 1 unterlaufen, indem er einfach
+ * das jüngste offene Ticket IRGENDEINES Mieters findet.
+ */
+function findLatestOpenTicketForContractor(contractorId: number): TicketRow | null {
+  const db = getDb();
+  const row = db
+    .select({ ticket: tickets })
+    .from(tickets)
+    .leftJoin(
+      approvals,
+      and(
+        eq(approvals.ticketId, tickets.id),
+        eq(approvals.contractorId, contractorId),
+        eq(approvals.status, "genehmigt"),
+      ),
+    )
+    .where(
+      and(
+        ne(tickets.status, "erledigt"),
+        or(eq(tickets.contractorId, contractorId), isNotNull(approvals.id)),
+      ),
+    )
+    .orderBy(desc(tickets.id))
+    .limit(1)
+    .get();
+  return row ? row.ticket : null;
+}
+
 export function loadTriggerInfo(messageId: number): TriggerInfo {
   const db = getDb();
   const message = db.select().from(messages).where(eq(messages.id, messageId)).get();
@@ -76,7 +111,18 @@ export function loadTriggerInfo(messageId: number): TriggerInfo {
   else if (message.role === "landlord") kind = "landlord_answer";
   else throw new Error(`Keine Agent-Verarbeitung für Rolle "${message.role}"`);
 
-  // Ticket auflösen: message.ticketId → Betreff-Tag → (bei Mieter) jüngstes nicht-erledigtes Ticket
+  // Handwerker früh auflösen: wird sowohl von resolveAuthorizedTaggedTicketId
+  // (Betreff-Tag-Berechtigungsprüfung) als auch vom Rückfall auf das jüngste,
+  // diesem Handwerker zugeordnete offene Ticket gebraucht.
+  let contractor: ContractorRow | null = null;
+  if (kind === "contractor_message") {
+    contractor =
+      db.select().from(contractors).where(eq(contractors.email, message.fromEmail.toLowerCase())).get() ?? null;
+  }
+
+  // Ticket auflösen: message.ticketId → Betreff-Tag → (bei Mieter) jüngstes
+  // nicht-erledigtes Ticket der Conversation → (bei Handwerker) jüngstes
+  // nicht-erledigtes Ticket, für das dieser Handwerker beauftragt ist.
   let ticket: TicketRow | null = null;
   if (message.ticketId != null) {
     ticket = db.select().from(tickets).where(eq(tickets.id, message.ticketId)).get() ?? null;
@@ -104,15 +150,19 @@ export function loadTriggerInfo(messageId: number): TriggerInfo {
         .limit(1)
         .get() ?? null;
   }
+  // Rückfall für einen Handwerker, der eine FRISCHE Mail schreibt statt auf
+  // die Ticket-Mail zu antworten (kein bzw. verworfener Betreff-Tag): ohne
+  // diesen Fallback gäbe es weder Ticket noch Mieter im Kontext, und alle
+  // sinnvollen Werkzeuge (send_reply, update_ticket) lieferten nur FEHLER.
+  if (!ticket && message.role === "contractor" && contractor) {
+    ticket = findLatestOpenTicketForContractor(contractor.id);
+  }
 
   let tenant: (TenantRow & { propertyAddress: string }) | null = null;
-  let contractor: ContractorRow | null = null;
 
   if (kind === "tenant_message") {
     tenant = loadTenantByEmail(message.fromEmail);
   } else if (kind === "contractor_message") {
-    contractor =
-      db.select().from(contractors).where(eq(contractors.email, message.fromEmail.toLowerCase())).get() ?? null;
     if (ticket) tenant = loadTenantWithProperty(ticket.tenantId);
   } else {
     // landlord_answer: Mieter über das Ticket, sonst über die Conversation-Zuordnung

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildTranscript, buildUserContent, loadTriggerInfo } from "@/agent/context";
 import { setDbForTesting, type AppDb } from "@/db/client";
 import {
+  approvals,
   attachments,
   contractors,
   conversations,
@@ -326,6 +327,179 @@ describe("loadTriggerInfo", () => {
     // (Name, Objektadresse, summary) dürfen NICHT in den Kontext gelangen.
     expect(trigger.tenant).toBeNull();
     expect(trigger.contractor?.id).toBe(contractorId);
+  });
+
+  // Important-Befund aus dem Abschluss-Review: Ein Handwerker schreibt eine
+  // FRISCHE Mail statt auf die Ticket-Mail zu antworten (kein Betreff-Tag).
+  // Der bisherige Rückfall "jüngstes offenes Ticket der Conversation" existierte
+  // nur für Mieter — für Handwerker gab es weder Ticket noch Mieter im Kontext.
+  it("contractor_message: ohne Betreff-Tag wird das jüngste offene Ticket gefunden, für das dieser Handwerker über tickets.contractorId beauftragt ist", () => {
+    const { tenantId, conversationId } = seedTenantWorld();
+    const contractorId = Number(
+      db
+        .insert(contractors)
+        .values({ name: "Sven Schloss", email: "sven.schloss@example.com", trade: "Schlüsseldienst" })
+        .run().lastInsertRowid,
+    );
+    const contractorConvId = Number(
+      db
+        .insert(conversations)
+        .values({
+          counterpartType: "contractor",
+          counterpartId: contractorId,
+          counterpartEmail: "sven.schloss@example.com",
+        })
+        .run().lastInsertRowid,
+    );
+    const ticketId = Number(
+      db
+        .insert(tickets)
+        .values({
+          tenantId,
+          conversationId,
+          type: "reparatur",
+          status: "handwerker_angefragt",
+          title: "Türschloss defekt",
+          contractorId,
+        })
+        .run().lastInsertRowid,
+    );
+    const msgId = insertMessage({
+      conversationId: contractorConvId,
+      role: "contractor",
+      fromEmail: "sven.schloss@example.com",
+      subject: "Terminvorschlag Musterstraße", // KEIN [HV-…]-Tag
+      body: "Zu der Sache in der Musterstraße: Dienstag 9 Uhr passt.",
+    });
+
+    const trigger = loadTriggerInfo(msgId);
+
+    expect(trigger.kind).toBe("contractor_message");
+    expect(trigger.ticket?.id).toBe(ticketId);
+    expect(trigger.tenant?.name).toBe("Max Mustermann");
+  });
+
+  it("contractor_message: ohne Betreff-Tag genügt auch eine genehmigte approvals-Zeile (ohne gesetztes tickets.contractorId)", () => {
+    const { tenantId, conversationId } = seedTenantWorld();
+    const contractorId = Number(
+      db
+        .insert(contractors)
+        .values({ name: "Sven Schloss", email: "sven.schloss@example.com", trade: "Schlüsseldienst" })
+        .run().lastInsertRowid,
+    );
+    const contractorConvId = Number(
+      db
+        .insert(conversations)
+        .values({
+          counterpartType: "contractor",
+          counterpartId: contractorId,
+          counterpartEmail: "sven.schloss@example.com",
+        })
+        .run().lastInsertRowid,
+    );
+    const ticketId = Number(
+      db
+        .insert(tickets)
+        .values({ tenantId, conversationId, type: "reparatur", status: "genehmigt", title: "Heizung defekt" })
+        .run().lastInsertRowid,
+    );
+    db.insert(approvals)
+      .values({
+        ticketId,
+        summary: "Heizung defekt",
+        contractorId,
+        emailSubject: "Auftrag",
+        emailBody: "Bitte Termin nennen.",
+        status: "genehmigt",
+      })
+      .run();
+    const msgId = insertMessage({
+      conversationId: contractorConvId,
+      role: "contractor",
+      fromEmail: "sven.schloss@example.com",
+      subject: "Rückmeldung",
+      body: "Ich kann Mittwoch vorbei.",
+    });
+
+    expect(loadTriggerInfo(msgId).ticket?.id).toBe(ticketId);
+  });
+
+  // Sichert Punkt 1 (Berechtigungsprüfung) auch für den Rückfall ab: Ein
+  // Handwerker ohne Tag darf NIE das offene Ticket eines anderen Mieters
+  // finden, nur weil es zufällig das jüngste in der DB ist.
+  it("contractor_message: der Rückfall findet KEIN Ticket, für das dieser Handwerker nicht beauftragt ist", () => {
+    const { tenantId, conversationId } = seedTenantWorld();
+    const contractorId = Number(
+      db
+        .insert(contractors)
+        .values({ name: "Sven Schloss", email: "sven.schloss@example.com", trade: "Schlüsseldienst" })
+        .run().lastInsertRowid,
+    );
+    const contractorConvId = Number(
+      db
+        .insert(conversations)
+        .values({
+          counterpartType: "contractor",
+          counterpartId: contractorId,
+          counterpartEmail: "sven.schloss@example.com",
+        })
+        .run().lastInsertRowid,
+    );
+    // Fremdes, offenes Ticket eines anderen Handwerkers/ohne Beauftragung.
+    db.insert(tickets)
+      .values({ tenantId, conversationId, type: "reparatur", status: "neu", title: "Fremder Auftrag" })
+      .run();
+    const msgId = insertMessage({
+      conversationId: contractorConvId,
+      role: "contractor",
+      fromEmail: "sven.schloss@example.com",
+      subject: "Frage",
+      body: "Worum geht es bei mir?",
+    });
+
+    const trigger = loadTriggerInfo(msgId);
+
+    expect(trigger.ticket).toBeNull();
+    expect(trigger.tenant).toBeNull();
+  });
+
+  it("contractor_message: der Rückfall ignoriert bereits erledigte Tickets dieses Handwerkers", () => {
+    const { tenantId, conversationId } = seedTenantWorld();
+    const contractorId = Number(
+      db
+        .insert(contractors)
+        .values({ name: "Sven Schloss", email: "sven.schloss@example.com", trade: "Schlüsseldienst" })
+        .run().lastInsertRowid,
+    );
+    const contractorConvId = Number(
+      db
+        .insert(conversations)
+        .values({
+          counterpartType: "contractor",
+          counterpartId: contractorId,
+          counterpartEmail: "sven.schloss@example.com",
+        })
+        .run().lastInsertRowid,
+    );
+    db.insert(tickets)
+      .values({
+        tenantId,
+        conversationId,
+        type: "reparatur",
+        status: "erledigt",
+        title: "Bereits erledigt",
+        contractorId,
+      })
+      .run();
+    const msgId = insertMessage({
+      conversationId: contractorConvId,
+      role: "contractor",
+      fromEmail: "sven.schloss@example.com",
+      subject: "Frage",
+      body: "Gibt es noch etwas offen?",
+    });
+
+    expect(loadTriggerInfo(msgId).ticket).toBeNull();
   });
 
   // Kernszenario aus dem Review: Mieterin Anna hat Ticket HV-n mit sensiblen
