@@ -58,8 +58,11 @@ Runtime-glibc passt.
 - Läuft als **uid 99 / gid 100** (`nobody:users`) — Unraids Besitzer für
   `/mnt/user/appdata`. Ein abweichender uid führt zu Schreibfehlern auf dem
   gemounteten Volume.
-- `VOLUME /app/data`; `DATA_DIR=/app/data` für SQLite-Datei, Mail-Anhänge und
-  hochgeladene Dokumente.
+- `VOLUME /app/data` als einziger persistenter Pfad. Die App kennt kein
+  `DATA_DIR`; das Image setzt stattdessen die im MVP-Plan vereinbarten
+  Variablen `DATABASE_PATH=/app/data/hausverwaltung.db` und
+  `ATTACHMENTS_DIR=/app/data/attachments`. Hochgeladene Dokumente liegen
+  als extrahierter Text in der Datenbank und brauchen keinen eigenen Pfad.
 - `EXPOSE 3000`, `ENV NODE_ENV=production PORT=3000 TZ=Europe/Berlin`.
 - `HEALTHCHECK` gegen `/api/health` (Route wird mit angelegt: prüft, dass der
   Prozess antwortet und die SQLite-Datei beschreibbar ist).
@@ -131,7 +134,10 @@ Beide Wege werden dokumentiert, die Wahl trifft Veit:
 ### 6.3 Konfiguration
 
 Env-Variablen: `ANTHROPIC_API_KEY`, Fastmail-IMAP/SMTP-Zugangsdaten, der
-dedizierte Alias, `DASHBOARD_PASSWORD`, Mail-Rate-Limit, `DATA_DIR`, `TZ`.
+dedizierte Alias, `DASHBOARD_PASSWORD`, `MAIL_RATE_LIMIT_PER_HOUR`,
+`POLL_INTERVAL_MS`, `LANDLORD_NAME`, `TZ`. `DATABASE_PATH` und
+`ATTACHMENTS_DIR` sind im Image bereits korrekt vorbelegt und müssen in
+Unraid nicht gesetzt werden.
 Die maßgebliche Liste ist `.env.example`; die Unraid-Doku wird daraus abgeleitet.
 
 ### 6.4 Aktualisieren und Zurückrollen
