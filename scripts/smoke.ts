@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { getDb } from "@/db/client";
 import { approvals, contractors, messages, tenants, tickets } from "@/db/schema";
 import { getEnv } from "@/env";
+import { reportStartupError } from "@/lib/startupError";
 import type { IncomingEmail, OutgoingEmail } from "@/channel/types";
 import { ingestEmail, processPendingMessages } from "@/worker/processor";
 
@@ -97,6 +98,10 @@ async function main(): Promise<void> {
 }
 
 main().catch((err: unknown) => {
-  console.error("Smoke-Test fehlgeschlagen:", err);
+  // Bei einer unvollstaendigen .env (getEnv() wirft eine EnvValidationError)
+  // reicht die aufbereitete deutsche Meldung — ein Stacktrace waere nur
+  // Rauschen. Bei jedem anderen, unerwarteten Fehler bleibt der Stack
+  // erhalten. Siehe src/lib/startupError.ts.
+  reportStartupError(err, "Smoke-Test fehlgeschlagen");
   process.exit(1);
 });

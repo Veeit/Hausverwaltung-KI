@@ -22,6 +22,19 @@ const envSchema = z.object({
 
 export type Env = z.infer<typeof envSchema>;
 
+// Eigener Fehlertyp fuer Konfigurationsfehler (ungueltige oder fehlende
+// Umgebungsvariablen). So koennen Aufrufer wie der Worker-Einstiegspunkt
+// einen Konfigurationsfehler zuverlaessig am TYP erkennen — statt am Text
+// der Meldung zu raten, was bei kuenftigen Textaenderungen leicht bricht.
+// Ein Konfigurationsfehler enthaelt bereits eine vollstaendige, lesbare
+// deutsche Meldung; ein Stacktrace waere fuer den Betreiber nur Rauschen.
+export class EnvValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "EnvValidationError";
+  }
+}
+
 // Schema fuer den Teil der Konfiguration, den reiner Datenbankzugriff
 // braucht. Bewusst von envSchema getrennt (siehe getDbEnv()): Skripte wie
 // `npm run seed` und die Stammdaten-Ansichten im Dashboard duerfen laufen,
@@ -69,7 +82,7 @@ function isEmpty(value: string | undefined): boolean {
 // Formulierung fuer "fehlt" vs. "ungueltig". Geheimnisse (SECRET_FIELDS)
 // zeigen nie ihren Wert; bei unkritischen Feldern wie MAIL_ALIAS hilft der
 // vorgefundene Wert beim Debuggen und wird deshalb angezeigt.
-function formatEnvError(error: ZodError): Error {
+function formatEnvError(error: ZodError): EnvValidationError {
   const seenFields = new Set<string>();
   const lines: string[] = [];
 
@@ -95,7 +108,7 @@ function formatEnvError(error: ZodError): Error {
     lines.join("\n") +
     "\n\nBitte die Werte in der Datei .env korrigieren (Vorlage: .env.example).";
 
-  return new Error(message);
+  return new EnvValidationError(message);
 }
 
 // Liest process.env bei JEDEM Aufruf neu (lazy, dadurch testbar).

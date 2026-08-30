@@ -1,5 +1,7 @@
 import "dotenv/config";
+import { pathToFileURL } from "node:url";
 import { getEnv } from "@/env";
+import { reportStartupError } from "@/lib/startupError";
 import { pollOnce, resetStuckProcessingMessages } from "@/worker/processor";
 
 let running = true;
@@ -24,7 +26,7 @@ function requestShutdown(signal: string): void {
 process.on("SIGINT", () => requestShutdown("SIGINT"));
 process.on("SIGTERM", () => requestShutdown("SIGTERM"));
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   const env = getEnv();
   console.log("[worker] KI-Hausverwaltung — Worker gestartet.");
   console.log(`[worker] Alias: ${env.MAIL_ALIAS}`);
@@ -56,4 +58,18 @@ async function main(): Promise<void> {
   process.exit(0);
 }
 
-void main();
+// Nur ausfuehren, wenn diese Datei direkt gestartet wurde (`npm run worker`,
+// intern `tsx src/worker/index.ts`) — nicht beim Import in Tests. Fehler aus
+// main() (z. B. eine EnvValidationError, wenn die .env noch unvollstaendig
+// ist) werden hier abgefangen: reportStartupError() gibt bei einem
+// Konfigurationsfehler nur die aufbereitete deutsche Meldung aus (kein
+// Stacktrace), bei jedem anderen Fehler bleibt der Stack fuer die
+// Fehlersuche erhalten. Der Prozess beendet sich in beiden Faellen mit
+// Exit-Code 1, damit eine Neustart-Schleife (siehe README) den Abbruch
+// erkennt.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err: unknown) => {
+    reportStartupError(err);
+    process.exit(1);
+  });
+}

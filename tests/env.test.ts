@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { getEnv } from "@/env";
+import { EnvValidationError, getEnv } from "@/env";
 
 // Pflichtfelder, die jeder Testfall als Ausgangsbasis gesetzt bekommt.
 const REQUIRED_ENV: Record<string, string> = {
@@ -113,6 +113,21 @@ describe("getEnv Fehlermeldung bei ungültiger Konfiguration", () => {
       expect(err).toBeInstanceOf(Error);
       expect((err as Error).name).not.toBe("ZodError");
     }
+  });
+
+  // Der Fehlertyp erlaubt Aufrufern (z.B. dem Worker-Einstiegspunkt), einen
+  // Konfigurationsfehler zuverlaessig am Typ zu erkennen statt am Text der
+  // Meldung zu raten — siehe reportStartupError() in src/lib/startupError.ts.
+  it("wirft eine EnvValidationError (erkennbarer Typ statt generischem Error)", () => {
+    delete process.env.ANTHROPIC_API_KEY;
+    let caught: unknown;
+    try {
+      getEnv();
+      expect.unreachable("getEnv() hätte werfen müssen");
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught instanceof EnvValidationError).toBe(true);
   });
 
   it("nennt alle fehlerhaften Variablen auf einmal, nicht nur die erste", () => {
