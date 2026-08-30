@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { getEnv } from "@/env";
 import { getDb } from "@/db/client";
 import { approvals, contractors, messages, tickets } from "@/db/schema";
@@ -58,36 +58,69 @@ export async function approveApproval(approvalId: number): Promise<void> {
     throw new Error(`Handwerker ${approval.contractorId} nicht gefunden.`);
   }
 
-  if (ticket.status === "wartet_auf_genehmigung") {
-    transitionTicket(ticket.id, "genehmigt");
+  // Anspruch atomar sichern, BEVOR irgendetwas anderes passiert (Ticket-
+  // Transition, Mailversand). Bedingtes Update: Es greift nur, wenn der
+  // Antrag zu diesem Zeitpunkt noch "offen" ist. Zwischen den obigen
+  // synchronen Lesezugriffen und hier liegt kein `await` — der komplette
+  // Block läuft in einem Zug, ohne dass ein zweiter, überlappender Aufruf
+  // dazwischenfunken kann. Wer zuerst hier ankommt, gewinnt den Anspruch;
+  // der andere sieht unten `changes === 0`.
+  // Vorher stand dieses Update erst NACH dem Mailversand — damit sahen zwei
+  // überlappende Aufrufe beide noch status="offen" und schickten dem
+  // Handwerker beide eine Mail (Doppelversand).
+  const claim = db
+    .update(approvals)
+    .set({ status: "genehmigt", decidedAt: new Date().toISOString() })
+    .where(and(eq(approvals.id, approval.id), eq(approvals.status, "offen")))
+    .run();
+  if (claim.changes === 0) {
+    throw new Error(
+      `Genehmigungsantrag ${approvalId} wurde soeben bereits in einem anderen Vorgang entschieden. Bitte die Seite neu laden.`,
+    );
   }
 
-  const convId = findOrCreateConversation({
-    email: contractor.email,
-    counterpartType: "contractor",
-    counterpartId: contractor.id,
-  });
+  try {
+    if (ticket.status === "wartet_auf_genehmigung") {
+      transitionTicket(ticket.id, "genehmigt");
+    }
 
-  await sendAndLogEmail({
-    to: contractor.email,
-    subject: ensureTag(approval.emailSubject, ticket.id),
-    text: approval.emailBody,
-    role: "landlord",
-    conversationId: convId,
-    ticketId: ticket.id,
-  });
+    const convId = findOrCreateConversation({
+      email: contractor.email,
+      counterpartType: "contractor",
+      counterpartId: contractor.id,
+    });
 
-  db.update(approvals)
-    .set({ status: "genehmigt", decidedAt: new Date().toISOString() })
-    .where(eq(approvals.id, approval.id))
-    .run();
+    await sendAndLogEmail({
+      to: contractor.email,
+      subject: ensureTag(approval.emailSubject, ticket.id),
+      text: approval.emailBody,
+      role: "landlord",
+      conversationId: convId,
+      ticketId: ticket.id,
+    });
 
-  db.update(tickets)
-    .set({ contractorId: contractor.id })
-    .where(eq(tickets.id, ticket.id))
-    .run();
+    db.update(tickets)
+      .set({ contractorId: contractor.id })
+      .where(eq(tickets.id, ticket.id))
+      .run();
 
-  transitionTicket(ticket.id, "handwerker_angefragt");
+    transitionTicket(ticket.id, "handwerker_angefragt");
+  } catch (err) {
+    // Wiederholbarkeit erhalten: Der Anspruch oben ist bereits gesichert,
+    // aber danach ist etwas schiefgegangen (typischerweise der SMTP-Versand).
+    // Antrag zurück auf "offen", damit ein erneuter Klick den Vorgang zu Ende
+    // bringen kann, statt dauerhaft in einem Zwischenzustand hängen zu
+    // bleiben ("genehmigt", aber ohne dass je eine Mail rausging).
+    // Bekannte Einschränkung (für den PoC hinnehmbar): Stürzt der Prozess
+    // exakt zwischen erfolgreichem Mailversand und diesem catch-Block ab,
+    // bleibt der Antrag auf "genehmigt" stehen, obwohl der weitere
+    // Statuswechsel (Ticket → handwerker_angefragt) nicht mehr passiert ist.
+    db.update(approvals)
+      .set({ status: "offen", decidedAt: null })
+      .where(eq(approvals.id, approval.id))
+      .run();
+    throw err;
+  }
 
   revalidateApprovalPages(ticket.id);
 }
@@ -101,18 +134,27 @@ export async function rejectApproval(approvalId: number, note: string): Promise<
   if (!ticket) {
     throw new Error(`Ticket ${approval.ticketId} nicht gefunden.`);
   }
+  // Spiegelbild des Guards in approveApproval: Der Ticket-Status wird VOR
+  // jedem Schreibzugriff geprüft. "abgelehnt" ist laut TICKET_TRANSITIONS nur
+  // aus "wartet_auf_genehmigung" heraus ein gültiges Ziel. Ohne diese Prüfung
+  // würde transitionTicket weiter unten erst NACH dem approvals-Update
+  // werfen (z. B. wenn das Ticket zwischenzeitlich nach "eskaliert" gewechselt
+  // ist, weil die KI eine Rückfrage gestellt hat) — der Antrag bliebe dann
+  // unwiderruflich auf "abgelehnt" stehen, ohne dass der Mieter je über die
+  // synthetische Nachricht informiert wird.
+  if (ticket.status !== "wartet_auf_genehmigung") {
+    throw new Error(
+      `Ticket ${ticket.id} ist nicht mehr im Status "wartet_auf_genehmigung" (aktuell: "${ticket.status}") ` +
+        `und kann daher nicht abgelehnt werden. Der Antrag bleibt offen — bitte Ticket ${buildTicketTag(ticket.id)} ` +
+        `zunächst dort prüfen und die Ablehnung danach erneut versuchen.`,
+    );
+  }
 
-  db.update(approvals)
-    .set({
-      status: "abgelehnt",
-      decisionNote: note,
-      decidedAt: new Date().toISOString(),
-    })
-    .where(eq(approvals.id, approval.id))
-    .run();
-
-  transitionTicket(ticket.id, "abgelehnt");
-
+  // Reihenfolge bewusst gewählt: Die Benachrichtigung des Mieters ist der
+  // eigentliche Zweck der Ablehnung und darf nicht übersprungen werden, falls
+  // ein späterer Schritt scheitert — deshalb zuerst die synthetische
+  // Nachricht anlegen, danach erst die Ticket-Transition und zuletzt den
+  // Antrag als entschieden markieren.
   db.insert(messages)
     .values({
       conversationId: ticket.conversationId,
@@ -125,6 +167,17 @@ export async function rejectApproval(approvalId: number, note: string): Promise<
       body: `Der Vermieter hat den Genehmigungsantrag zu Ticket ${buildTicketTag(ticket.id)} abgelehnt. Begründung: ${note}. Bitte informiere den Mieter freundlich und biete ggf. Alternativen an.`,
       processingStatus: "pending",
     })
+    .run();
+
+  transitionTicket(ticket.id, "abgelehnt");
+
+  db.update(approvals)
+    .set({
+      status: "abgelehnt",
+      decisionNote: note,
+      decidedAt: new Date().toISOString(),
+    })
+    .where(eq(approvals.id, approval.id))
     .run();
 
   revalidateApprovalPages(ticket.id);

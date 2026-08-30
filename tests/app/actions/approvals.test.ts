@@ -1,6 +1,6 @@
 // tests/app/actions/approvals.test.ts
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { makeTestDb } from "../../helpers/db";
 import { setDbForTesting, type AppDb } from "@/db/client";
 import {
@@ -15,6 +15,7 @@ import {
 import { setAuthCookieValue } from "../../helpers/nextMocks";
 import { sha256Hex } from "@/lib/auth";
 import { sendSmtp } from "@/channel/smtp";
+import { transitionTicket } from "@/lib/tickets";
 import {
   approveApproval,
   rejectApproval,
@@ -203,6 +204,70 @@ describe("approveApproval", () => {
       .get();
     expect(decided?.status).toBe("genehmigt");
   });
+
+  it("stellt den Zustand her, den das Agent-Werkzeug send_reply für Handwerker-Mails voraussetzt", async () => {
+    // send_reply (src/agent/tools.ts) lässt E-Mails an den Handwerker nur zu,
+    // wenn GENAU diese Kombination existiert: eine approvals-Zeile mit
+    // status="genehmigt" für GENAU dieses Ticket und GENAU diesen Handwerker,
+    // sowie tickets.contractorId gesetzt. Dieser Test bildet exakt die Gate-
+    // Abfrage aus tools.ts nach, damit eine künftige Änderung an approveApproval
+    // diesen Vertrag nicht versehentlich bricht.
+    const { ticket, contractor, approval } = seed();
+
+    await approveApproval(approval.id);
+
+    const gateRow = db
+      .select()
+      .from(approvals)
+      .where(
+        and(
+          eq(approvals.ticketId, ticket.id),
+          eq(approvals.status, "genehmigt"),
+          eq(approvals.contractorId, contractor.id),
+        ),
+      )
+      .get();
+    expect(gateRow).toBeDefined();
+    expect(gateRow?.id).toBe(approval.id);
+
+    const updatedTicket = db.select().from(tickets).where(eq(tickets.id, ticket.id)).get();
+    expect(updatedTicket?.contractorId).toBe(contractor.id);
+  });
+
+  it("schickt bei zwei überlappenden Genehmigungen genau eine Mail an den Handwerker (Race Condition)", async () => {
+    // Realistische SMTP-Latenz simulieren: Ein sofort auflösender Mock würde
+    // den Test zufällig serialisieren (requireAuth() braucht selbst ein paar
+    // Mikro-Ticks) und die Race Condition dadurch verdecken, statt sie zu
+    // beweisen. Mit spürbarer Verzögerung sind beide Aufrufe garantiert
+    // gleichzeitig "in Flight", bevor irgendeine Antwort zurückkommt.
+    const { ticket, approval } = seed();
+    vi.mocked(sendSmtp).mockImplementation(
+      () => new Promise((resolve) => setTimeout(resolve, 30)),
+    );
+
+    const results = await Promise.allSettled([
+      approveApproval(approval.id),
+      approveApproval(approval.id),
+    ]);
+
+    expect(sendSmtp).toHaveBeenCalledTimes(1);
+
+    const fulfilled = results.filter((r) => r.status === "fulfilled");
+    const rejected = results.filter((r) => r.status === "rejected") as PromiseRejectedResult[];
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect(String(rejected[0].reason?.message)).toMatch(/bereits/);
+
+    const finalTicket = db.select().from(tickets).where(eq(tickets.id, ticket.id)).get();
+    expect(finalTicket?.status).toBe("handwerker_angefragt");
+
+    const finalApproval = db
+      .select()
+      .from(approvals)
+      .where(eq(approvals.id, approval.id))
+      .get();
+    expect(finalApproval?.status).toBe("genehmigt");
+  });
 });
 
 describe("rejectApproval", () => {
@@ -256,6 +321,39 @@ describe("rejectApproval", () => {
       .run();
 
     await expect(rejectApproval(approval.id, "Egal")).rejects.toThrow();
+  });
+
+  it("bricht ab, wenn das Ticket zwischenzeitlich in einen Status gewechselt hat, aus dem heraus 'abgelehnt' kein gültiger Übergang ist, und lässt den Antrag bearbeitbar", async () => {
+    // Szenario: Zwischen Antragstellung und Vermieter-Klick hat die KI eine
+    // Rückfrage gestellt und das Ticket nach "eskaliert" transitioniert (ein
+    // regulärer Übergang aus "wartet_auf_genehmigung"). Aus "eskaliert" heraus
+    // ist "abgelehnt" laut TICKET_TRANSITIONS kein gültiges Ziel mehr.
+    const { conv, ticket, approval } = seed();
+    transitionTicket(ticket.id, "eskaliert");
+
+    await expect(
+      rejectApproval(approval.id, "Zu teuer, bitte erst einen Kostenvoranschlag einholen"),
+    ).rejects.toThrow();
+
+    // Der Antrag darf NICHT unwiderruflich auf "abgelehnt" stehen bleiben —
+    // sonst verschwindet er aus /genehmigungen, ein erneuter Versuch ist
+    // blockiert, und die synthetische Nachricht an den Mieter wird nie erzeugt.
+    const unchangedApproval = db
+      .select()
+      .from(approvals)
+      .where(eq(approvals.id, approval.id))
+      .get();
+    expect(unchangedApproval?.status).toBe("offen");
+
+    const unchangedTicket = db.select().from(tickets).where(eq(tickets.id, ticket.id)).get();
+    expect(unchangedTicket?.status).toBe("eskaliert");
+
+    const synthetic = db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, conv.id))
+      .all();
+    expect(synthetic).toHaveLength(0);
   });
 });
 
