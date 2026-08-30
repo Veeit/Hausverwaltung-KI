@@ -19,11 +19,7 @@ import { findOrCreateConversation } from "@/lib/conversations";
 import { RecipientNotAllowedError } from "@/lib/recipients";
 import { RateLimitExceededError } from "@/lib/rateLimit";
 import type { sendSmtp } from "@/channel/smtp";
-
-// Strukturell identische Kopie von AgentKind aus src/agent/context.ts (Task 9).
-// Bewusst NICHT exportiert: die offizielle Definition liegt in context.ts;
-// dieser Task muss aber ohne context.ts kompilieren.
-type AgentKind = "tenant_message" | "contractor_message" | "landlord_answer";
+import type { AgentKind } from "@/agent/context";
 
 export interface AgentToolContext {
   kind: AgentKind;

@@ -15,31 +15,16 @@ import {
 } from "@/db/schema";
 import { TICKET_STATUSES, type TicketStatus } from "@/lib/tickets";
 import { buildTicketTag } from "@/lib/subject";
+import { roleLabel, formatDate } from "@/lib/format";
 import { sendManualReply, setTicketStatus } from "@/app/actions/tickets";
 import StatusBadge from "@/app/components/StatusBadge";
 
 export const dynamic = "force-dynamic";
 
-const ROLE_LABELS: Record<string, string> = {
-  tenant: "Mieter",
-  contractor: "Handwerker",
-  landlord: "Vermieter",
-  ai: "KI-Assistent",
-  unknown: "Unbekannt",
-};
-
 const DIRECTION_LABELS: Record<string, string> = {
   inbound: "eingehend",
   outbound: "ausgehend",
 };
-
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleString("de-DE", {
-    dateStyle: "short",
-    timeStyle: "short",
-    timeZone: "Europe/Berlin",
-  });
-}
 
 async function changeStatusAction(formData: FormData): Promise<void> {
   "use server";
@@ -252,7 +237,7 @@ export default async function VorgangDetailPage({
             {messageRows.map((m) => (
               <li key={m.id} className="border border-gray-200 rounded p-3 text-sm">
                 <p className="font-semibold">
-                  {ROLE_LABELS[m.role] ?? m.role} ({DIRECTION_LABELS[m.direction] ?? m.direction})
+                  {roleLabel(m.role)} ({DIRECTION_LABELS[m.direction] ?? m.direction})
                   <span className="font-normal text-gray-500">
                     {" "}
                     — {formatDate(m.createdAt)}

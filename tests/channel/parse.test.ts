@@ -54,4 +54,48 @@ describe("parseRawEmail", () => {
     expect(mail.text).not.toContain("<p>");
     expect(mail.text).not.toContain("<b>");
   });
+
+  // Review-Befund: Ein reiner Zufallswert als Ersatz-Message-ID wäre bei
+  // jedem erneuten Parsen derselben Rohmail unterschiedlich — die
+  // Dedupe-Prüfung über imapMessageId (ingestEmail) könnte dann nicht
+  // greifen, und ein Mieter bekäme zwei KI-Antworten, wenn das Quittieren
+  // im Postfach einmal scheitert (die Mail wird beim nächsten Poll aus
+  // denselben Rohbytes erneut geparst).
+  it("erzeugt für dieselbe Mail ohne Message-ID bei wiederholtem Parsen dieselbe Ersatz-Id (stabile Dedupe-Grundlage)", async () => {
+    const raw = [
+      "From: unbekannt@example.com",
+      "To: hausverwaltung@example.com",
+      "Subject: Frage zur Nebenkostenabrechnung",
+      "Date: Mon, 1 Sep 2025 10:00:00 +0000",
+      "MIME-Version: 1.0",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      "Guten Tag, ich habe eine Frage zur Abrechnung.",
+    ].join("\r\n");
+
+    const first = await parseRawEmail(Buffer.from(raw, "utf8"));
+    const second = await parseRawEmail(Buffer.from(raw, "utf8"));
+
+    expect(first.messageId).toBe(second.messageId);
+    expect(first.messageId).toMatch(/^generated-/);
+  });
+
+  it("erzeugt für unterschiedliche Mails ohne Message-ID unterschiedliche Ersatz-Ids", async () => {
+    const rawBase = (subject: string) =>
+      [
+        "From: unbekannt@example.com",
+        "To: hausverwaltung@example.com",
+        `Subject: ${subject}`,
+        "Date: Mon, 1 Sep 2025 10:00:00 +0000",
+        "MIME-Version: 1.0",
+        "Content-Type: text/plain; charset=utf-8",
+        "",
+        "Guten Tag, ich habe eine Frage zur Abrechnung.",
+      ].join("\r\n");
+
+    const first = await parseRawEmail(Buffer.from(rawBase("Frage A"), "utf8"));
+    const second = await parseRawEmail(Buffer.from(rawBase("Frage B"), "utf8"));
+
+    expect(first.messageId).not.toBe(second.messageId);
+  });
 });

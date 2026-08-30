@@ -187,6 +187,12 @@ export async function processPendingMessages(deps?: AgentRunDeps): Promise<void>
     .all();
 
   for (const row of pending) {
+    // Kill-Switch auch WÄHREND der Verarbeitung prüfen, nicht nur einmal zu
+    // Beginn von pollOnce: Überschreitet eine Nachricht mitten in diesem
+    // Batch das Mail-Rate-Limit (assertRateLimit setzt WORKER_PAUSED_KEY),
+    // sollen die restlichen Nachrichten NICHT mehr je einen vollen (und
+    // ohnehin blockierten) Modell-Lauf durchlaufen.
+    if (isWorkerPaused()) return;
     await runAgentOnMessage(row.id, deps);
   }
 }

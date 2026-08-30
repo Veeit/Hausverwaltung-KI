@@ -17,6 +17,7 @@ import {
   type TicketRow,
 } from "@/db/schema";
 import { resolveAuthorizedTaggedTicketId } from "@/lib/ticketAccess";
+import { roleLabel } from "@/lib/format";
 
 export type AgentKind = "tenant_message" | "contractor_message" | "landlord_answer";
 
@@ -31,18 +32,6 @@ export interface TriggerInfo {
 // Die einzigen von Claude unterstützten Bild-MIME-Typen (siehe API-Doku); alle anderen
 // image/*-Typen (z.B. image/heic von iPhone-Fotos oder image/svg+xml) werden abgelehnt.
 const SUPPORTED_IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
-
-const ROLE_LABELS: Record<string, string> = {
-  tenant: "Mieter",
-  contractor: "Handwerker",
-  landlord: "Vermieter",
-  ai: "KI-Assistent",
-  unknown: "Unbekannt",
-};
-
-function roleLabel(role: string): string {
-  return ROLE_LABELS[role] ?? "Unbekannt";
-}
 
 function loadTenantWithProperty(tenantId: number): (TenantRow & { propertyAddress: string }) | null {
   const db = getDb();

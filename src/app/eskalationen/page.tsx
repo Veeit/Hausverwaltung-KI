@@ -4,6 +4,7 @@ import { getDb } from "@/db/client";
 import { conversations, escalations, tenants, tickets } from "@/db/schema";
 import type { EscalationRow, TicketRow } from "@/db/schema";
 import { buildTicketTag } from "@/lib/subject";
+import { formatDate } from "@/lib/format";
 import { answerEscalation } from "@/app/actions/escalations";
 
 export const dynamic = "force-dynamic";
@@ -133,7 +134,7 @@ export default function EskalationenPage() {
               </button>
             </form>
             <p className="mt-2 text-xs text-gray-400">
-              Erstellt: {escalation.createdAt}
+              Erstellt: {formatDate(escalation.createdAt)}
             </p>
           </li>
         ))}
@@ -166,7 +167,7 @@ export default function EskalationenPage() {
               Antwort: {escalation.answer}
             </p>
             <p className="mt-2 text-xs text-gray-400">
-              Beantwortet: {escalation.answeredAt}
+              Beantwortet: {escalation.answeredAt ? formatDate(escalation.answeredAt) : "—"}
             </p>
           </li>
         ))}

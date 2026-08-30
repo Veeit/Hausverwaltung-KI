@@ -1,11 +1,13 @@
 import Link from "next/link";
 import { and, count, desc, eq, lt } from "drizzle-orm";
 import { getDb } from "@/db/client";
-import { approvals, escalations, messages, tickets } from "@/db/schema";
+import { approvals, contractors, escalations, messages, tenants, tickets } from "@/db/schema";
 import { TICKET_STATUSES } from "@/lib/tickets";
 import { isWorkerPaused } from "@/lib/rateLimit";
-import { resumeWorkerAction } from "@/app/actions/worker";
+import { roleLabel, formatDate } from "@/lib/format";
+import { resumeWorkerAction, reprocessMessage } from "@/app/actions/worker";
 import { StatusBadge } from "@/app/components/StatusBadge";
+import { ActionForm } from "@/app/components/ActionForm";
 
 export const dynamic = "force-dynamic";
 
@@ -15,14 +17,6 @@ export const dynamic = "force-dynamic";
 // resetStuckProcessingMessages), aber solange kein Neustart erfolgt ist (der
 // Prozess also z.B. hängt statt abzustürzen), soll das hier sichtbar werden.
 const STUCK_PROCESSING_THRESHOLD_MS = 5 * 60 * 1000;
-
-const ROLE_LABELS: Record<string, string> = {
-  tenant: "Mieter",
-  contractor: "Handwerker",
-  landlord: "Vermieter",
-  ai: "KI-Assistent",
-  unknown: "Unbekannt",
-};
 
 function excerpt(text: string, max = 200): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
@@ -79,6 +73,14 @@ export default function OverviewPage() {
     .orderBy(desc(messages.id))
     .limit(10)
     .all();
+  // Bekannte Adressen vorab laden, um pro unbekannter Nachricht zu
+  // entscheiden, ob "Erneut zur Verarbeitung freigeben" angezeigt wird —
+  // reprocessMessage() lehnt sonst mit einem Fehler ab, wenn der Absender
+  // weiterhin unbekannt ist.
+  const knownEmails = new Set([
+    ...db.select({ email: tenants.email }).from(tenants).all().map((t) => t.email),
+    ...db.select({ email: contractors.email }).from(contractors).all().map((c) => c.email),
+  ]);
 
   const recentMessages = db
     .select()
@@ -135,7 +137,7 @@ export default function OverviewPage() {
                   Antrag #{a.id} zu Ticket [HV-{a.ticketId}]
                 </Link>
                 <p className="text-sm text-gray-700">{a.summary}</p>
-                <p className="text-xs text-gray-500">{a.createdAt}</p>
+                <p className="text-xs text-gray-500">{formatDate(a.createdAt)}</p>
               </li>
             ))}
           </ul>
@@ -155,7 +157,7 @@ export default function OverviewPage() {
                   {e.ticketId !== null ? ` zu Ticket [HV-${e.ticketId}]` : ""}
                 </Link>
                 <p className="text-sm text-gray-700">{e.question}</p>
-                <p className="text-xs text-gray-500">{e.createdAt}</p>
+                <p className="text-xs text-gray-500">{formatDate(e.createdAt)}</p>
               </li>
             ))}
           </ul>
@@ -202,7 +204,7 @@ export default function OverviewPage() {
                   <p className="text-sm font-medium">
                     Nachricht #{m.id} von {m.fromEmail} — {m.subject || "(kein Betreff)"}
                   </p>
-                  <p className="text-xs text-gray-500">Seit: {m.createdAt}</p>
+                  <p className="text-xs text-gray-500">Seit: {formatDate(m.createdAt)}</p>
                 </li>
               ))}
             </ul>
@@ -220,9 +222,22 @@ export default function OverviewPage() {
               <li key={m.id} className="rounded border border-gray-200 bg-white p-3">
                 <p className="text-sm font-medium">
                   {m.fromEmail} — {m.subject || "(kein Betreff)"}{" "}
-                  <span className="text-xs font-normal text-gray-500">{m.createdAt}</span>
+                  <span className="text-xs font-normal text-gray-500">{formatDate(m.createdAt)}</span>
                 </p>
                 <p className="text-sm text-gray-700">{excerpt(m.body)}</p>
+                {knownEmails.has(m.fromEmail) ? (
+                  <ActionForm action={reprocessMessage.bind(null, m.id)} className="mt-2">
+                    <p className="mb-1 text-xs text-green-700">
+                      Dieser Absender ist inzwischen in den Stammdaten angelegt.
+                    </p>
+                    <button
+                      type="submit"
+                      className="rounded border border-green-600 px-2 py-1 text-xs font-medium text-green-700 hover:bg-green-50"
+                    >
+                      Erneut zur Verarbeitung freigeben
+                    </button>
+                  </ActionForm>
+                ) : null}
               </li>
             ))}
           </ul>
@@ -239,8 +254,8 @@ export default function OverviewPage() {
               <li key={m.id} className="rounded border border-gray-200 bg-white p-3">
                 <p className="text-xs text-gray-500">
                   {m.direction === "inbound" ? "Eingang" : "Ausgang"} ·{" "}
-                  {ROLE_LABELS[m.role] ?? m.role} · {m.fromEmail} → {m.toEmail} ·{" "}
-                  {m.createdAt}
+                  {roleLabel(m.role)} · {m.fromEmail} → {m.toEmail} ·{" "}
+                  {formatDate(m.createdAt)}
                 </p>
                 <p className="text-sm font-medium">{m.subject || "(kein Betreff)"}</p>
                 <p className="text-sm text-gray-700">{excerpt(m.body)}</p>

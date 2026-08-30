@@ -3,6 +3,7 @@ import { asc, eq } from "drizzle-orm";
 import { getDb } from "@/db/client";
 import { approvals, contractors, properties, tenants, tickets } from "@/db/schema";
 import { buildTicketTag } from "@/lib/subject";
+import { formatDate } from "@/lib/format";
 import {
   approveApproval,
   rejectApproval,
@@ -11,14 +12,6 @@ import {
 import { ActionForm } from "@/app/components/ActionForm";
 
 export const dynamic = "force-dynamic";
-
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleString("de-DE", {
-    dateStyle: "short",
-    timeStyle: "short",
-    timeZone: "Europe/Berlin",
-  });
-}
 
 async function saveDraftAction(formData: FormData): Promise<void> {
   "use server";

@@ -438,6 +438,52 @@ describe("processPendingMessages", () => {
     await processPendingMessages(fake.deps);
     expect(fake.calls()).toBe(0);
   });
+
+  // Review-Befund: isWorkerPaused() wurde bisher nur einmal zu Beginn von
+  // pollOnce geprüft. Springt der Kill-Switch WÄHREND der Verarbeitung eines
+  // Batches an (z.B. weil eine Nachricht mittendrin das Mail-Rate-Limit
+  // überschreitet), liefen bisher alle restlichen Nachrichten noch je einen
+  // vollen (und ohnehin blockierten) Modell-Lauf durch.
+  it("bricht die Verarbeitung ab, sobald der Kill-Switch WÄHREND des Batches aktiviert wird", async () => {
+    const tenantId = seedTenant();
+    const conversationId = findOrCreateConversation({
+      email: "max.mustermann@example.com",
+      counterpartType: "tenant",
+      counterpartId: tenantId,
+    });
+    const base = {
+      conversationId,
+      direction: "inbound" as const,
+      role: "tenant" as const,
+      fromEmail: "max.mustermann@example.com",
+      toEmail: "hausverwaltung@example.com",
+      processingStatus: "pending" as const,
+    };
+    const firstId = Number(
+      db.insert(messages).values({ ...base, subject: "Erste", body: "Erste Nachricht" }).run()
+        .lastInsertRowid,
+    );
+    const secondId = Number(
+      db.insert(messages).values({ ...base, subject: "Zweite", body: "Zweite Nachricht" }).run()
+        .lastInsertRowid,
+    );
+
+    await processPendingMessages({
+      runTools: async () => {
+        // Simuliert: Die erste Nachricht löst mittendrin den Kill-Switch aus
+        // (z.B. weil ihr send_reply das Mail-Rate-Limit überschreitet).
+        setSetting(WORKER_PAUSED_KEY, "1");
+        return { stopReason: "end_turn" };
+      },
+    });
+
+    // Nur die erste Nachricht wurde überhaupt angefasst (auf 'processing'
+    // gesetzt und verarbeitet); die zweite bleibt unangetastet auf 'pending'.
+    const first = db.select().from(messages).where(eq(messages.id, firstId)).get()!;
+    const second = db.select().from(messages).where(eq(messages.id, secondId)).get()!;
+    expect(first.processingStatus).toBe("done");
+    expect(second.processingStatus).toBe("pending");
+  });
 });
 
 // Important-Befund aus dem Abschluss-Review: runAgentOnMessage() setzt den

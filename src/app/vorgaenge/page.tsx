@@ -3,17 +3,10 @@ import { desc, eq } from "drizzle-orm";
 import { getDb } from "@/db/client";
 import { tenants, tickets } from "@/db/schema";
 import { buildTicketTag } from "@/lib/subject";
+import { formatDate } from "@/lib/format";
 import StatusBadge from "@/app/components/StatusBadge";
 
 export const dynamic = "force-dynamic";
-
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleString("de-DE", {
-    dateStyle: "short",
-    timeStyle: "short",
-    timeZone: "Europe/Berlin",
-  });
-}
 
 export default function VorgaengePage() {
   const db = getDb();
