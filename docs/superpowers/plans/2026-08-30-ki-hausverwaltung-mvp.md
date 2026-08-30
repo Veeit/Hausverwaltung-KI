@@ -244,7 +244,7 @@ zuerst Task 1 des Deployment-Plans ausfuehren.
 
 ### Task 2: DB-Fundament
 
-Dieser Task legt die komplette Datenbank-Schicht an: das Drizzle-Schema (alle 11 Tabellen), die handgeschriebene DDL (kein drizzle-kit!), den DB-Client mit Test-Override, ein Key-Value-Settings-Modul sowie das idempotente Seed-Skript. Voraussetzung ist Task 1 (Projekt-Scaffolding): `package.json` mit `drizzle-orm`, `better-sqlite3`, `vitest`, `tsx`; `src/env.ts` mit `getEnv()`; Pfad-Alias `@/*` → `./src/*` in tsconfig UND vitest.config.
+Dieser Task legt die komplette Datenbank-Schicht an: das Drizzle-Schema (alle 11 Tabellen), die handgeschriebene DDL (kein drizzle-kit!), den DB-Client mit Test-Override, ein Key-Value-Settings-Modul sowie das idempotente Seed-Skript. Voraussetzung ist Task 1 (Env-Konfiguration) samt dem dort vorausgesetzten Projektgeruest: `package.json` mit `drizzle-orm`, `better-sqlite3`, `vitest`, `tsx`; `src/env.ts` mit `getEnv()`; Pfad-Alias `@/*` → `./src/*` in tsconfig UND vitest.config.
 
 Zwei Prinzipien, die dieser Task technisch absichert:
 
