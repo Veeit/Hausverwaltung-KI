@@ -215,6 +215,23 @@ describe("fetchNewEmails (echte IMAP-Orchestrierung, imapflow gemockt)", () => {
     expect(lockReleaseMock).toHaveBeenCalledTimes(1);
     expect(logoutMock).toHaveBeenCalledTimes(1);
   });
+
+  // Review-Befund: connect() und getMailboxLock() standen AUSSERHALB des
+  // try-Blocks, dessen finally client.logout() aufruft. Schlug der
+  // Lock-Erwerb NACH erfolgreichem connect() fehl, blieb eine offene
+  // IMAP-Sitzung zurück — bei einem Worker, der alle 30 Sekunden pollt,
+  // summiert sich das (dieses System läuft auf dem privaten Postfach des
+  // Nutzers). lock.release() darf dabei NICHT aufgerufen werden, weil der
+  // Lock nie erworben wurde.
+  it("schließt die Verbindung AUCH, wenn der Mailbox-Lock-Erwerb fehlschlägt (kein Leak nach erfolgreichem connect())", async () => {
+    getMailboxLockMock.mockRejectedValueOnce(new Error("Mailbox-Lock nicht verfügbar"));
+
+    await expect(fetchNewEmails()).rejects.toThrow("Mailbox-Lock nicht verfügbar");
+
+    expect(connectMock).toHaveBeenCalledTimes(1);
+    expect(logoutMock).toHaveBeenCalledTimes(1);
+    expect(lockReleaseMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("markEmailsSeen (quittiert Mails erst NACH erfolgreicher Persistierung durch den Aufrufer)", () => {
@@ -249,5 +266,15 @@ describe("markEmailsSeen (quittiert Mails erst NACH erfolgreicher Persistierung 
     expect(constructorMock).not.toHaveBeenCalled();
     expect(connectMock).not.toHaveBeenCalled();
     expect(messageFlagsAddMock).not.toHaveBeenCalled();
+  });
+
+  it("schließt die Verbindung AUCH, wenn der Mailbox-Lock-Erwerb fehlschlägt (kein Leak nach erfolgreichem connect())", async () => {
+    getMailboxLockMock.mockRejectedValueOnce(new Error("Mailbox-Lock nicht verfügbar"));
+
+    await expect(markEmailsSeen([1])).rejects.toThrow("Mailbox-Lock nicht verfügbar");
+
+    expect(connectMock).toHaveBeenCalledTimes(1);
+    expect(logoutMock).toHaveBeenCalledTimes(1);
+    expect(lockReleaseMock).not.toHaveBeenCalled();
   });
 });

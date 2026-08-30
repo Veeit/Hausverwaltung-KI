@@ -48,42 +48,51 @@ export async function fetchNewEmails(): Promise<FetchedEmail[]> {
   const env = getEnv();
   const client = await openConnection();
 
-  const fetched: FetchedEmail[] = [];
-  const lock = await client.getMailboxLock("INBOX");
+  // client.logout() steht in einem äußeren finally, das den gesamten Block ab
+  // hier umschließt: schlägt bereits getMailboxLock() fehl (nach erfolgreichem
+  // connect()), bliebe sonst eine offene IMAP-Sitzung zurück — bei einem
+  // Worker, der alle 30 Sekunden pollt, summiert sich das. Der Lock selbst
+  // wird weiterhin in einem eigenen, inneren finally freigegeben, damit
+  // lock.release() nie aufgerufen wird, wenn der Lock nie erworben wurde.
   try {
-    // Die Alias-Einschränkung muss bereits Teil der IMAP-Suche sein, nicht erst
-    // des nachgelagerten Filters: sonst würde die private Post des Nutzers
-    // (dieser Account ist sein Fastmail-Postfach) mitheruntergeladen. Die
-    // serverseitige TO/CC-SEARCH matcht laut RFC 3501 aber nur als Substring,
-    // nicht exakt (z. B. Plus-Adressierung, Domain-Treffer, Zufallstreffer im
-    // Display-Namen) — der Server kann also UIDs liefern, die den Alias nur
-    // scheinbar treffen. Deshalb wird jede heruntergeladene Mail einzeln mit
-    // filterToAlias geprüft; Substring-Kollisionen werden verworfen und
-    // tauchen im Rückgabewert gar nicht erst auf — sie dürfen also auch
-    // später nie als \Seen markiert werden.
-    const alias = env.MAIL_ALIAS;
-    const uids =
-      (await client.search(
-        { seen: false, or: [{ to: alias }, { cc: alias }] },
-        { uid: true },
-      )) || [];
-    for (const uid of uids) {
-      const { content } = await client.download(String(uid), undefined, { uid: true });
-      const chunks: Buffer[] = [];
-      for await (const chunk of content) {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const fetched: FetchedEmail[] = [];
+    const lock = await client.getMailboxLock("INBOX");
+    try {
+      // Die Alias-Einschränkung muss bereits Teil der IMAP-Suche sein, nicht erst
+      // des nachgelagerten Filters: sonst würde die private Post des Nutzers
+      // (dieser Account ist sein Fastmail-Postfach) mitheruntergeladen. Die
+      // serverseitige TO/CC-SEARCH matcht laut RFC 3501 aber nur als Substring,
+      // nicht exakt (z. B. Plus-Adressierung, Domain-Treffer, Zufallstreffer im
+      // Display-Namen) — der Server kann also UIDs liefern, die den Alias nur
+      // scheinbar treffen. Deshalb wird jede heruntergeladene Mail einzeln mit
+      // filterToAlias geprüft; Substring-Kollisionen werden verworfen und
+      // tauchen im Rückgabewert gar nicht erst auf — sie dürfen also auch
+      // später nie als \Seen markiert werden.
+      const alias = env.MAIL_ALIAS;
+      const uids =
+        (await client.search(
+          { seen: false, or: [{ to: alias }, { cc: alias }] },
+          { uid: true },
+        )) || [];
+      for (const uid of uids) {
+        const { content } = await client.download(String(uid), undefined, { uid: true });
+        const chunks: Buffer[] = [];
+        for await (const chunk of content) {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        }
+        const mail = await parseRawEmail(Buffer.concat(chunks));
+        if (filterToAlias([mail], alias).length > 0) {
+          fetched.push({ uid, mail });
+        }
       }
-      const mail = await parseRawEmail(Buffer.concat(chunks));
-      if (filterToAlias([mail], alias).length > 0) {
-        fetched.push({ uid, mail });
-      }
+    } finally {
+      lock.release();
     }
+
+    return fetched;
   } finally {
-    lock.release();
     await client.logout();
   }
-
-  return fetched;
 }
 
 /**
@@ -96,11 +105,17 @@ export async function markEmailsSeen(uids: number[]): Promise<void> {
   if (uids.length === 0) return;
 
   const client = await openConnection();
-  const lock = await client.getMailboxLock("INBOX");
+  // Gleiche Absicherung wie in fetchNewEmails(): client.logout() im äußeren
+  // finally, damit ein fehlschlagender Lock-Erwerb nach erfolgreichem
+  // connect() keine offene Verbindung hinterlässt.
   try {
-    await client.messageFlagsAdd(uids, ["\\Seen"], { uid: true });
+    const lock = await client.getMailboxLock("INBOX");
+    try {
+      await client.messageFlagsAdd(uids, ["\\Seen"], { uid: true });
+    } finally {
+      lock.release();
+    }
   } finally {
-    lock.release();
     await client.logout();
   }
 }
