@@ -1,8 +1,13 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_DATABASE_PATH, getHealthStatus } from "@/lib/health";
+
+// POSIX-Rechteprüfungen werden für uid 0 übersprungen: Als root wäre das
+// Verzeichnis trotz chmod 0o555 "beschreibbar", der Test würde aus dem
+// falschen Grund fehlschlagen. Deshalb sichtbar überspringen statt verfälschen.
+const isRoot = process.getuid?.() === 0;
 
 describe("getHealthStatus", () => {
   let dataDir: string;
@@ -33,13 +38,15 @@ describe("getHealthStatus", () => {
   });
 
   it("meldet error, wenn das Datenverzeichnis fehlt", () => {
-    const missing = path.join(dataDir, "gibt-es-nicht", "hausverwaltung.db");
+    const missingDir = path.join(dataDir, "gibt-es-nicht");
+    const missing = path.join(missingDir, "hausverwaltung.db");
 
     const result = getHealthStatus({ DATABASE_PATH: missing });
 
     expect(result.status).toBe("error");
     if (result.status === "error") {
-      expect(result.error).toContain(path.join(dataDir, "gibt-es-nicht"));
+      expect(result.error).toContain(missingDir);
+      expect(result.error).toContain("existiert nicht");
     }
   });
 
@@ -52,4 +59,29 @@ describe("getHealthStatus", () => {
       expect(result.error).toContain(path.dirname(DEFAULT_DATABASE_PATH));
     }
   });
+
+  it.skipIf(isRoot)(
+    "meldet error mit anderer Ursache, wenn das Datenverzeichnis existiert, aber nicht beschreibbar ist",
+    () => {
+      const readonlyDir = path.join(dataDir, "readonly");
+      mkdirSync(readonlyDir);
+
+      try {
+        chmodSync(readonlyDir, 0o555);
+
+        const result = getHealthStatus({
+          DATABASE_PATH: path.join(readonlyDir, "hausverwaltung.db"),
+        });
+
+        expect(result.status).toBe("error");
+        if (result.status === "error") {
+          expect(result.error).toContain(readonlyDir);
+          expect(result.error).toContain("nicht beschreibbar");
+        }
+      } finally {
+        // Schreibrechte wiederherstellen, damit rmSync im afterEach greift.
+        chmodSync(readonlyDir, 0o755);
+      }
+    },
+  );
 });

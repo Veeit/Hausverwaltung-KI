@@ -19,11 +19,16 @@ export function getHealthStatus(env: NodeJS.ProcessEnv = process.env): HealthSta
 
   try {
     accessSync(dataDir, constants.W_OK);
-  } catch {
-    return {
-      status: "error",
-      error: `Datenverzeichnis ${dataDir} fehlt oder ist nicht beschreibbar`,
-    };
+  } catch (err) {
+    // ENOENT = Verzeichnis fehlt, EACCES/EPERM = Verzeichnis existiert, aber
+    // ist nicht beschreibbar (z. B. falscher Container-Benutzer auf Unraid).
+    const code = (err as NodeJS.ErrnoException).code;
+    const error =
+      code === "ENOENT"
+        ? `Datenverzeichnis ${dataDir} existiert nicht`
+        : `Datenverzeichnis ${dataDir} ist nicht beschreibbar`;
+
+    return { status: "error", error };
   }
 
   return { status: "ok", worker: env.RUN_WORKER === "0" ? "disabled" : "enabled" };
