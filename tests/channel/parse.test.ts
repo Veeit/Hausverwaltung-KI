@@ -80,6 +80,31 @@ describe("parseRawEmail", () => {
     expect(first.messageId).toMatch(/^generated-/);
   });
 
+  // Restbefund Punkt 5: Fehlen SOWOHL Message-ID ALS AUCH Date-Header, floss
+  // vor dem Fix new Date() (der Zeitpunkt des Parse-Aufrufs) in den Hash ein
+  // — der wäre bei jedem erneuten Parsen derselben Rohbytes anders und hätte
+  // die Dedupe-Prüfung über imapMessageId (ingestEmail) genau in dem Moment
+  // versagen lassen, für den die stabile Ersatz-Id eigentlich gebaut wurde:
+  // Scheitert das Quittieren einer Mail im Postfach einmal, wird sie beim
+  // nächsten Poll aus denselben Rohbytes erneut geparst (siehe pollOnce).
+  it("erzeugt für dieselbe Mail OHNE Message-ID UND OHNE Date-Header bei wiederholtem Parsen dieselbe Ersatz-Id (stabile Dedupe-Grundlage)", async () => {
+    const raw = [
+      "From: unbekannt@example.com",
+      "To: hausverwaltung@example.com",
+      "Subject: Frage zur Nebenkostenabrechnung",
+      "MIME-Version: 1.0",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      "Guten Tag, ich habe eine Frage zur Abrechnung.",
+    ].join("\r\n");
+
+    const first = await parseRawEmail(Buffer.from(raw, "utf8"));
+    const second = await parseRawEmail(Buffer.from(raw, "utf8"));
+
+    expect(first.messageId).toMatch(/^generated-/);
+    expect(first.messageId).toBe(second.messageId);
+  });
+
   it("erzeugt für unterschiedliche Mails ohne Message-ID unterschiedliche Ersatz-Ids", async () => {
     const rawBase = (subject: string) =>
       [
