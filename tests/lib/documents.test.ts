@@ -185,6 +185,49 @@ describe("lib/documents", () => {
     expect(hits[0].filename).toBe("mietvertrag.pdf");
   });
 
+  // Haertungsluecke 2: Das obige PDF-Fixture (mini-vertrag.pdf) ist absichtlich
+  // > 4 KB, weil pdf-parse bei KLEINEREN Buffern reproduzierbar mit "bad XRef
+  // entry" scheitert (siehe Kommentar oben + src/lib/documents.ts,
+  // ensurePdfParseSafeBuffer). Ein einseitiges Hausordnungs-PDF liegt aber
+  // typischerweise UNTER 4 KB - genau dieser Fall war bisher ungetestet.
+  //
+  // Damit der Test die Pool-Bedingung tatsaechlich herstellt (ein Buffer, der
+  // zufaellig bei byteOffset 0 liegt, wuerde den Fehler NICHT ausloesen und
+  // der Test waere wertlos): Vor dem Aufruf werden mehrere kleine Buffer
+  // alloziert, um Node's gemeinsamen Buffer-Pool gezielt von Offset 0
+  // wegzuschieben - exakt der Zustand, der in einem laenger laufenden
+  // Node-Prozess (z.B. dem Produktionsserver) nach beliebigen vorherigen
+  // kleinen Allokationen ohnehin die Regel ist, nicht die Ausnahme.
+  it("addDocument verarbeitet ein KLEINES PDF (< 4 KB) trotz Node-Buffer-Pool (pdf-parse-Bug, siehe ensurePdfParseSafeBuffer)", async () => {
+    // Pool absichtlich "verschmutzen", damit die interne Kopie von pdf-parse
+    // garantiert NICHT bei byteOffset 0 im Pool landet:
+    for (let i = 0; i < 8; i++) {
+      Buffer.allocUnsafe(16 + i);
+    }
+
+    const pdfBuffer = readFileSync(
+      join(process.cwd(), "tests", "fixtures", "kurz-hausordnung.pdf"),
+    );
+    expect(pdfBuffer.length).toBeLessThan(4096);
+
+    const id = await addDocument("hausordnung-kurz.pdf", "application/pdf", pdfBuffer);
+
+    expect(id).toBeGreaterThan(0);
+    const docs = listDocuments();
+    expect(docs).toHaveLength(1);
+    expect(docs[0].filename).toBe("hausordnung-kurz.pdf");
+    expect(docs[0].mimeType).toBe("application/pdf");
+    // Echte Extraktion (nicht Rohdaten-Fallback) - siehe Begruendung beim
+    // vorigen PDF-Test:
+    expect(docs[0].contentLength).toBeGreaterThan(0);
+    expect(docs[0].contentLength).toBeLessThan(200);
+
+    const hits = searchDocuments("Ruhezeiten");
+    expect(hits).toHaveLength(1);
+    expect(hits[0].documentId).toBe(id);
+    expect(hits[0].filename).toBe("hausordnung-kurz.pdf");
+  });
+
   it("deleteDocument entfernt Dokument UND FTS-Eintrag", async () => {
     const id = await addDocument(
       "hausordnung.txt",

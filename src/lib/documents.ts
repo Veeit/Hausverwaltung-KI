@@ -20,6 +20,47 @@ function isPdf(filename: string, mimeType: string): boolean {
   );
 }
 
+// Node kopiert Buffer < 4096 Byte (Buffer.poolSize >>> 1) aus einem
+// gemeinsamen, wiederverwendeten Pool-ArrayBuffer; ab dieser Groesse
+// erzwingt Node fuer JEDE Kopie eine eigene, dedizierte Allokation.
+const PDF_PARSE_POOL_THRESHOLD = 4096;
+
+// WICHTIG: Bibliotheksfehler in pdf-parse (buendelt pdf.js v1.10.100) —
+// Stream.makeSubStream() in pdf.worker.js nutzt this.bytes.buffer (den
+// rohen, potenziell gepoolten ArrayBuffer), addiert dabei aber NICHT den
+// byteOffset des Uint8Array. pdf.js kopiert unseren Eingabe-Buffer zudem
+// intern nochmal (LoopbackPort-Simulation des Web-Workers via
+// postMessage/cloneValue) — diese interne Kopie ist selbst wieder ein
+// gepoolter Node-Buffer, sobald ihre Groesse < 4096 Byte ist, mit einem vom
+// Allokationszustand des Prozesses abhaengigen (also nicht deterministischen)
+// byteOffset != 0. Ergebnis: "bad XRef entry" bereits beim ersten Objekt,
+// reproduzierbar bei praktisch jedem PDF < 4 KB — also genau den kurzen
+// Dokumenten (Hausordnung, FAQ, einzelne Vertragsklauseln), die hier die
+// Norm sind. Wichtig: Der byteOffset UNSERES Eingabe-Buffers spielt dabei
+// keine Rolle — auch ein per Buffer.allocUnsafeSlow bereits auf byteOffset 0
+// normalisierter Buffer loest den Fehler weiterhin aus (empirisch
+// verifiziert, siehe tests/lib/documents.test.ts), weil die fehlerhafte
+// Kopie ausschliesslich INNERHALB von pdf-parse/pdf.js entsteht und nur von
+// deren eigener (durch unsere Buffer-GROESSE bestimmter) Allokation abhaengt.
+// Einzig wirksame Abhilfe: den an pdf-parse uebergebenen Buffer auf
+// mindestens 4096 Byte auffuellen, damit auch die interne Kopie garantiert
+// nicht gepoolt wird (byteOffset garantiert 0). Die Fuellmasse wird HINTER
+// das Dateiende (nach %%EOF) angehaengt: pdf.js sucht "startxref" rueckwaerts
+// durch die GESAMTE Datei, zusaetzliche Bytes danach werden nie referenziert
+// und veraendern keinen der im xref gespeicherten absoluten Byte-Offsets.
+// Buffer.allocUnsafeSlow liefert dafuer eine garantiert pool-freie, dedizierte
+// Allokation (siehe Node-Doku); der Rest wird explizit gefuellt, damit kein
+// uninitialisierter Prozessspeicher an pdf-parse durchgereicht wird.
+function ensurePdfParseSafeBuffer(data: Buffer): Buffer {
+  if (data.length >= PDF_PARSE_POOL_THRESHOLD) {
+    return data;
+  }
+  const padded = Buffer.allocUnsafeSlow(PDF_PARSE_POOL_THRESHOLD);
+  data.copy(padded);
+  padded.fill(0x20, data.length);
+  return padded;
+}
+
 export async function addDocument(
   filename: string,
   mimeType: string,
@@ -27,7 +68,9 @@ export async function addDocument(
 ): Promise<number> {
   let content: string;
   if (isPdf(filename, mimeType)) {
-    const parsed = (await pdfParse(data)) as { text: string };
+    const parsed = (await pdfParse(ensurePdfParseSafeBuffer(data))) as {
+      text: string;
+    };
     content = parsed.text;
   } else {
     content = data.toString("utf8");
