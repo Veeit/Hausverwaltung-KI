@@ -200,6 +200,21 @@ export async function pollOnce(deps?: {
     }
   }
 
-  await markSeenFn(seenUids);
+  // Das Quittieren wird bewusst eigens abgesichert: Scheitert es (z.B. durch
+  // einen abgebrochenen IMAP-Verbindungsaufbau), sollen die bereits sicher in
+  // der DB gespeicherten Nachrichten TROTZDEM verarbeitet werden — sie stehen
+  // ja schon fest in der DB, unabhängig davon, ob das Postfach sie noch als
+  // ungelesen führt. Kein Datenrisiko: nicht quittierte Mails werden beim
+  // nächsten Poll erneut geholt und über die Message-ID-Deduplizierung in
+  // ingestEmail() automatisch übersprungen.
+  try {
+    await markSeenFn(seenUids);
+  } catch (err) {
+    console.error(
+      `[worker] Quittieren als gelesen fehlgeschlagen (uids=${JSON.stringify(seenUids)}) — ` +
+        `werden beim nächsten Poll erneut abgeholt und über die Message-ID dedupliziert:`,
+      err,
+    );
+  }
   await processPendingMessages(deps?.agent);
 }

@@ -473,4 +473,42 @@ describe("pollOnce", () => {
 
     consoleErrorSpy.mockRestore();
   });
+
+  // Review-Befund: markSeenFn() stand ohne eigenes try/catch VOR
+  // processPendingMessages(). Warf das Quittieren (z.B. ein abgebrochener
+  // IMAP-Verbindungsaufbau), erreichte processPendingMessages() diesen
+  // Durchlauf gar nicht mehr — bereits sicher gespeicherte Nachrichten blieben
+  // liegen, obwohl an ihrer Verarbeitung nichts hinderte. Kein Datenverlust:
+  // nicht quittierte Mails werden beim naechsten Poll erneut geholt und ueber
+  // die Message-ID dedupliziert (siehe ingestEmail).
+  it("Quittierungsfehler (markSeen wirft): gespeicherte Nachrichten werden trotzdem verarbeitet", async () => {
+    seedTenant();
+    const fake = makeAgentFake();
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await pollOnce({
+      fetch: async () => [{ uid: 42, mail: makeMail() }],
+      markSeen: async () => {
+        throw new Error("IMAP-Verbindung abgebrochen");
+      },
+      agent: fake.deps,
+    });
+
+    // Die Nachricht wurde trotz gescheitertem Quittieren gespeichert UND verarbeitet.
+    const msg = db
+      .select()
+      .from(messages)
+      .where(eq(messages.imapMessageId, "<msg-1@example.com>"))
+      .get();
+    expect(msg).toBeTruthy();
+    expect(msg!.processingStatus).toBe("done");
+    expect(fake.calls()).toBe(1);
+
+    // Der Quittierungsfehler wurde geloggt, statt den restlichen Durchlauf zu blockieren.
+    expect(consoleErrorSpy).toHaveBeenCalled();
+    const loggedText = consoleErrorSpy.mock.calls.map((call) => call.join(" ")).join(" ");
+    expect(loggedText).toContain("IMAP-Verbindung abgebrochen");
+
+    consoleErrorSpy.mockRestore();
+  });
 });
