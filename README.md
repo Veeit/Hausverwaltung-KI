@@ -75,7 +75,7 @@ nicht erst heruntergeladen wird. Zweitens wird jede heruntergeladene Mail vor
 der Verarbeitung noch einmal exakt gegen die Alias-Adresse geprüft — auch ein
 zufälliger Teilstring-Treffer der (laut RFC 3501 nicht exakten) IMAP-Suche
 fällt dabei heraus. Nur Mails, die diese Prüfung bestehen, werden überhaupt
-als gelesen markiert; alles andere bleibt unangetastet und ungelesen.
+als verarbeitet markiert; alles andere bleibt unangetastet.
 
 #### Wohin soll der Alias zustellen?
 
@@ -96,13 +96,37 @@ Ordnernamen gesetzt werden (siehe Konfigurationstabelle unten). Bleibt
 einen anderen Ordner zustellt, findet der Worker dort schlicht nichts — die
 Poll-Läufe laufen scheinbar fehlerfrei, aber leer.
 
-**Achtung, Falle beim Testen:** Der Worker verarbeitet ausschließlich
-**ungelesene** Mails. Öffnest du eine Test-Mail zur Kontrolle in einem
-Mail-Client (Fastmail-Webmail, Handy-App, …), markiert das sie automatisch
-als gelesen — der Worker übergeht sie dann beim nächsten Poll, obwohl sie
-weiterhin im richtigen Ordner liegt. Abhilfe: die Mail im Mail-Client wieder
-explizit als ungelesen markieren (meist über das Kontextmenü oder ein
-Umschlag-Symbol) und den nächsten Poll-Durchlauf (~30 s) abwarten.
+**Gelesen-Status spielt für die Verarbeitung keine Rolle mehr.** Frühere
+Versionen erkannten neue Mails ausschließlich am Gelesen-Status
+(`\Seen`) — öffnest du eine Test-Mail zur Kontrolle in einem Mail-Client
+(Fastmail-Webmail, Handy-App, …), markiert das sie automatisch als gelesen,
+und der Worker überging sie dauerhaft, obwohl sie weiterhin korrekt im
+richtigen Ordner lag. Genau das ist im ersten Live-Test passiert. Das ist
+behoben: Erlaubt dein IMAP-Server eigene Schlagworte (Fastmail tut das), führt
+der Worker den Verarbeitungsstatus stattdessen über ein eigenes,
+projektspezifisches Schlagwort (`KIHausverwaltungVerarbeitet`). Ob eine Mail
+davor gelesen wurde oder nicht, ist dafür unerheblich — ein versehentliches
+Anklicken verhindert die Verarbeitung also nicht mehr. `\Seen` wird nach
+erfolgreicher Verarbeitung weiterhin zusätzlich gesetzt, aber nur noch aus
+Komfortgründen: damit erledigte Mails dem Vermieter nicht als ungelesen im
+Ordner liegen bleiben.
+
+Damit ein allererster Lauf gegen einen bereits gewachsenen Ordner nicht jede
+jemals an den Alias gegangene Mail auf einmal als neu ansieht (die
+Schlagwort-Suche verzichtet ja bewusst auf den Gelesen-Filter, der das bisher
+implizit verhinderte), begrenzt `IMAP_LOOKBACK_DAYS` diese Suche zusätzlich
+zeitlich (Default 3 Tage, siehe Konfigurationstabelle unten). Eine
+Message-ID-Deduplizierung in der Datenbank verhindert zusätzlich, dass eine
+Mail doppelt verarbeitet wird.
+
+Unterstützt dein IMAP-Server keine eigenen Schlagworte (bei Fastmail nicht der
+Fall, aber nicht jeder Anbieter erlaubt das), fällt der Worker automatisch auf
+den alten Gelesen-Status zurück — dann gilt die oben beschriebene Falle
+weiterhin, und `IMAP_LOOKBACK_DAYS` bleibt ohne Wirkung. Welchen der beiden
+Wege dein Server bekommt, meldet der Worker beim Start einmalig im Log
+(`[imap] Server erlaubt eigene Schlagworte …` bzw. `[imap] Server erlaubt
+KEINE eigenen Schlagworte …` mit Hinweis auf die damit verbundene
+Einschränkung).
 
 ## Konfiguration (`.env`)
 
@@ -121,6 +145,7 @@ Dann die Werte eintragen:
 | `DASHBOARD_PASSWORD` | Passwort für das Dashboard-Login | — |
 | `IMAP_HOST` / `IMAP_PORT` | IMAP-Server | `imap.fastmail.com` / `993` |
 | `IMAP_MAILBOX` | Postfach-Ordner, der auf Alias-Mails durchsucht wird — bei Zustellung per Fastmail-Regel in einen eigenen Ordner (Option B oben) auf dessen exakten Namen setzen | `INBOX` |
+| `IMAP_LOOKBACK_DAYS` | Wie viele Tage in die Vergangenheit die Suche nach neuen Mails höchstens zurückreicht (nur relevant, wenn der Server eigene Schlagworte unterstützt, siehe oben) | `3` |
 | `SMTP_HOST` / `SMTP_PORT` | SMTP-Server | `smtp.fastmail.com` / `465` |
 | `MAIL_RATE_LIMIT_PER_HOUR` | Kill-Switch: max. ausgehende Mails pro Stunde | `20` |
 | `DATABASE_PATH` | Pfad zur SQLite-Datei | `./data/hausverwaltung.db` |
@@ -255,3 +280,9 @@ npm run build    # Produktions-Build des Dashboards
   anderen Handwerker (der den alten dann als aktuell Beauftragten ablöst).
   Es gibt keine Aktion, die einen beauftragten Handwerker ausdrücklich vom
   Vorgang abzieht, ohne gleichzeitig einen neuen zu beauftragen.
+- Erlaubt der IMAP-Server keine eigenen Schlagworte (siehe Abschnitt
+  „Fastmail einrichten" oben), fällt der Worker auf den Gelesen-Status
+  (`\Seen`) als Verarbeitungsmerkmal zurück — dann verhindert ein
+  versehentliches Anklicken einer Mail im Mail-Client die Verarbeitung wieder,
+  genau wie vor diesem Fix. Der Worker meldet diesen Fall beim Start einmalig
+  im Log.
