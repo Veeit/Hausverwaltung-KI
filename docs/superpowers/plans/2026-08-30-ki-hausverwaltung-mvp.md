@@ -24,6 +24,8 @@
 - Alle UI-/Mail-Texte Deutsch, Mieter siezen; KI signiert als „Ihre Hausverwaltung (KI-Assistent)“. Statuswerte/Enums deutsch (`neu`, `infosammlung`, …), Code-Identifier englisch.
 - Zeitstempel: ISO-8601 (UTC) via `new Date().toISOString()`.
 - **Jede** ausgehende Mail nur über `sendAndLogEmail()` (Whitelist + Rate-Limit + Log, erst loggen, dann senden); **jeder** Statuswechsel nur über `transitionTicket()`; die KI wählt nie freie Empfängeradressen (`send_reply` nur mit `recipient: 'mieter' | 'handwerker'`).
+- **Login/Middleware sind fail-closed:** Ein leeres oder fehlendes `DASHBOARD_PASSWORD` verweigert den Zugriff IMMER (`getExpectedAuthCookie()` in `@/lib/auth` liefert dann `null`, niemals `sha256("")`). Ohne diese Regel wäre `sha256("")` ein öffentlich bekannter, konstanter Hash, den jeder ohne Passwortkenntnis in sein Cookie schreiben könnte — eine leere Konfiguration darf also nie als "gültiges Passwort" durchgehen.
+- **E-Mail-Adressen werden vor jedem Vergleich/Lookup `.trim().toLowerCase()`.** Adressen aus Mail-Headern (Worker-Klassifikation, Empfänger-Whitelist, Conversation-Zuordnung) können umgebende Leerzeichen mitbringen; ohne Trim werden sie fälschlich als unbekannt/fremd eingestuft, obwohl ein Mieter oder Handwerker mit genau dieser (getrimmten) Adresse hinterlegt ist.
 - Commits: `feat:`/`test:`/`chore:`-Präfixe; jede Commit-Message endet mit Leerzeile + `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`.
 
 ## Task-Übersicht
@@ -1632,6 +1634,23 @@ Tickets sind die zentralen Vorgänge der Hausverwaltung (z.B. "Türschloss defek
       }
       expect(TICKET_TRANSITIONS.erledigt).toEqual([]);
     });
+
+    // Kann auftreten, wenn `from` aus der Datenbank stammt (Altbestand, direkter
+    // DB-Zugriff) und kein bekannter Status mehr ist. Ohne die Prüfung in
+    // canTransition würde TICKET_TRANSITIONS[from] undefined liefern und der
+    // nachfolgende .includes()-Aufruf einen nichtssagenden TypeError werfen.
+    it("wirft bei unbekanntem Ausgangsstatus eine aussagekräftige Fehlermeldung statt eines TypeError", () => {
+      const unbekannt = "archiviert" as TicketStatus;
+      expect(() => canTransition(unbekannt, "erledigt")).toThrow(/archiviert/);
+      expect(() => canTransition(unbekannt, "erledigt")).not.toThrow(TypeError);
+    });
+  });
+
+  describe("InvalidTransitionError", () => {
+    it("trägt den Namen 'InvalidTransitionError' statt des generischen 'Error'", () => {
+      const err = new InvalidTransitionError("Testfehler");
+      expect(err.name).toBe("InvalidTransitionError");
+    });
   });
 
   describe("createTicket", () => {
@@ -1739,6 +1758,22 @@ Tickets sind die zentralen Vorgänge der Hausverwaltung (z.B. "Türschloss defek
     it("wirft Error, wenn das Ticket nicht existiert", () => {
       expect(() => transitionTicket(999, "erledigt")).toThrow("Ticket 999 nicht gefunden");
     });
+
+    it("wirft eine aussagekräftige Fehlermeldung statt eines TypeError, wenn das Ticket in der Datenbank einen unbekannten Ausgangsstatus hat", () => {
+      const { tenantId, conversationId } = seedTenantAndConversation();
+      const id = createTicket({
+        tenantId,
+        conversationId,
+        type: "reparatur",
+        title: "Türschloss defekt",
+      });
+      // Simuliert Altbestand/direkten DB-Zugriff mit einem Status, den die
+      // Statusmaschine nicht kennt.
+      db.update(tickets).set({ status: "archiviert" }).where(eq(tickets.id, id)).run();
+
+      expect(() => transitionTicket(id, "erledigt")).toThrow(/archiviert/);
+      expect(() => transitionTicket(id, "erledigt")).not.toThrow(TypeError);
+    });
   });
   ```
 
@@ -1775,10 +1810,29 @@ Tickets sind die zentralen Vorgänge der Hausverwaltung (z.B. "Türschloss defek
     erledigt: [],
   };
 
-  export class InvalidTransitionError extends Error {}
+  // `this.name` explizit setzen: Ohne diese Zeile bliebe err.name der
+  // generische "Error" (JS setzt ihn bei einer Subclass nicht automatisch),
+  // und ein `err.name === "InvalidTransitionError"`-Check an einer Aufrufstelle
+  // würde fälschlich fehlschlagen.
+  export class InvalidTransitionError extends Error {
+    constructor(message: string) {
+      super(message);
+      this.name = "InvalidTransitionError";
+    }
+  }
 
   export function canTransition(from: TicketStatus, to: TicketStatus): boolean {
-    return TICKET_TRANSITIONS[from].includes(to);
+    const allowedTargets = TICKET_TRANSITIONS[from];
+    if (!allowedTargets) {
+      // Kann auftreten, wenn `from` aus der Datenbank stammt (Altbestand,
+      // direkter DB-Zugriff) und kein bekannter Status mehr ist. Ohne diese
+      // Prüfung würde TICKET_TRANSITIONS[from] undefined liefern und der
+      // nachfolgende .includes()-Aufruf einen nichtssagenden TypeError werfen.
+      throw new Error(
+        `Unbekannter Ticketstatus "${from}": Statuswechsel kann nicht geprüft werden.`,
+      );
+    }
+    return allowedTargets.includes(to);
   }
 
   export function createTicket(input: {
@@ -2040,6 +2094,13 @@ Vier kleine, unabhängige Bausteine rund um den Mail-Verkehr, jeweils in einem e
       expect(isAllowedRecipient("Max.Mustermann@Example.COM")).toBe(true);
       expect(isAllowedRecipient("KLAUS.ROHR@EXAMPLE.COM")).toBe(true);
     });
+
+    // Review-Befund: Adressen mit umgebenden Leerzeichen (z.B. aus einem
+    // kopierten Mail-Header) wurden vor dem Fix fälschlich abgelehnt.
+    it("ignoriert umgebende Leerzeichen (kopierte Mail-Header)", () => {
+      expect(isAllowedRecipient("  max.mustermann@example.com  ")).toBe(true);
+      expect(isAllowedRecipient("\tklaus.rohr@example.com\n")).toBe(true);
+    });
   });
 
   describe("assertAllowedRecipient", () => {
@@ -2062,7 +2123,7 @@ Vier kleine, unabhängige Bausteine rund um den Mail-Verkehr, jeweils in einem e
 
 - [ ] **Step 8: Implementierung Empfänger-Whitelist**
 
-  Datei `src/lib/recipients.ts` mit folgendem vollständigen Inhalt anlegen. Mieter- und Handwerker-E-Mails werden laut Schema immer lowercase gespeichert; der Vergleich lowercased daher nur die Eingabe:
+  Datei `src/lib/recipients.ts` mit folgendem vollständigen Inhalt anlegen. Mieter- und Handwerker-E-Mails werden laut Schema immer lowercase gespeichert; der Vergleich lowercased daher nur die Eingabe. Zusätzlich wird vor dem Vergleich getrimmt: Adressen aus kopierten Mail-Headern oder ähnlichen Quellen können führende/nachgestellte Leerzeichen mitbringen, und ohne Trim würden solche Adressen fälschlich abgelehnt (die DB speichert stets getrimmt) — die Fehlrichtung ist zwar ungefährlich (zu streng statt zu lax), führt in der Praxis aber zu unerklärlichen Blockaden:
 
   ```ts
   import { eq } from "drizzle-orm";
@@ -2073,7 +2134,7 @@ Vier kleine, unabhängige Bausteine rund um den Mail-Verkehr, jeweils in einem e
 
   export function isAllowedRecipient(email: string): boolean {
     const db = getDb();
-    const normalized = email.toLowerCase();
+    const normalized = email.trim().toLowerCase();
     const tenant = db
       .select({ id: tenants.id })
       .from(tenants)
@@ -2357,6 +2418,27 @@ Vier kleine, unabhängige Bausteine rund um den Mail-Verkehr, jeweils in einem e
       expect(db.select().from(conversations).all()).toHaveLength(1);
     });
 
+    // Review-Befund: Ohne .trim() legte eine E-Mail mit umgebenden Leerzeichen
+    // (z.B. aus einem kopierten Mail-Header) eine ZWEITE, doppelte Conversation
+    // an, statt die bestehende zu finden.
+    it("ignoriert umgebende Leerzeichen und findet dieselbe Conversation", () => {
+      const first = findOrCreateConversation({
+        email: "max.mustermann@example.com",
+        counterpartType: "tenant",
+        counterpartId: 1,
+      });
+      const second = findOrCreateConversation({
+        email: "  max.mustermann@example.com  ",
+        counterpartType: "tenant",
+        counterpartId: 1,
+      });
+
+      expect(second).toBe(first);
+      expect(db.select().from(conversations).all()).toHaveLength(1);
+      const row = db.select().from(conversations).where(eq(conversations.id, first)).get();
+      expect(row?.counterpartEmail).toBe("max.mustermann@example.com");
+    });
+
     it("wertet eine unknown-Conversation zu tenant auf, wenn der Absender später bekannt ist", () => {
       const id = findOrCreateConversation({
         email: "max.mustermann@example.com",
@@ -2423,7 +2505,7 @@ Vier kleine, unabhängige Bausteine rund um den Mail-Verkehr, jeweils in einem e
 
 - [ ] **Step 18: Implementierung Conversations**
 
-  Datei `src/lib/conversations.ts` mit folgendem vollständigen Inhalt anlegen:
+  Datei `src/lib/conversations.ts` mit folgendem vollständigen Inhalt anlegen. `.trim()` wie in `src/lib/recipients.ts`: ohne diesen Trim würde dieselbe E-Mail-Adresse mit Leerzeichen-Umgebung (z.B. aus einem kopierten Mail-Header) eine zweite, doppelte Conversation anlegen statt die bestehende zu finden:
 
   ```ts
   import { eq } from "drizzle-orm";
@@ -2437,7 +2519,7 @@ Vier kleine, unabhängige Bausteine rund um den Mail-Verkehr, jeweils in einem e
     subject?: string;
   }): number {
     const db = getDb();
-    const email = input.email.toLowerCase();
+    const email = input.email.trim().toLowerCase();
 
     const existing = db
       .select()
@@ -3055,7 +3137,7 @@ Dünner IMAP-Abruf ungelesener Mails via imapflow. Die Verbindung selbst wird NI
   - `import type { IncomingEmail } from "@/channel/types"` (Task 5)
   - npm-Paket (installiert in Task 1): `imapflow`
 - Produces:
-  - `@/channel/imap`: `fetchNewEmails(): Promise<IncomingEmail[]>` — genutzt von Task 10 (`pollOnce`, dort auch als injizierbare `fetch`-Dependency); `filterToAlias(mails: IncomingEmail[], alias: string): IncomingEmail[]` — pure Hilfsfunktion, case-insensitiver Abgleich gegen `to[]`
+  - `@/channel/imap`: `interface FetchedEmail { uid: number; mail: IncomingEmail }`; `fetchNewEmails(): Promise<FetchedEmail[]>` — genutzt von Task 10 (`pollOnce`, dort auch als injizierbare `fetch`-Dependency); `markEmailsSeen(uids: number[]): Promise<void>` — genutzt von Task 10 (`pollOnce`, injizierbare `markSeen`-Dependency), quittiert erst NACH erfolgreicher Persistierung; `filterToAlias(mails: IncomingEmail[], alias: string): IncomingEmail[]` — pure Hilfsfunktion, case-insensitiver Abgleich gegen `to[]`
 
 - [ ] **Step 1: Fehlschlagenden Test für `filterToAlias` schreiben**
 
@@ -3119,9 +3201,11 @@ Dünner IMAP-Abruf ungelesener Mails via imapflow. Die Verbindung selbst wird NI
 
 - [ ] **Step 3: `src/channel/imap.ts` implementieren**
 
-  Ablauf: connect → `getMailboxLock("INBOX")` → Suche **eingeschränkt auf den Alias** (`{ seen: false, or: [{ to: alias }, { cc: alias }] }`) → je UID herunterladen und parsen → **pro Mail** mit `filterToAlias([mail], alias)` prüfen → nur bei Treffer sammeln **und** `\Seen` setzen → Lock-Release + Logout im `finally`.
+  Ablauf: connect → `getMailboxLock("INBOX")` → Suche **eingeschränkt auf den Alias** (`{ seen: false, or: [{ to: alias }, { cc: alias }] }`) → je UID herunterladen und parsen → **pro Mail** mit `filterToAlias([mail], alias)` prüfen → nur bei Treffer sammeln (zusammen mit der UID) → Lock-Release + Logout im `finally`. Das Setzen von `\Seen` ist bewusst **nicht** Teil von `fetchNewEmails` — dafür gibt es die separate Funktion `markEmailsSeen(uids)`.
 
-  **Die Privatpost wird zweifach geschützt, und beide Schichten sind nötig.** Das System läuft auf dem privaten Postfach des Nutzers. Erstens muss die Alias-Einschränkung Teil der Suchanfrage sein — würde man alle ungelesenen Mails holen und erst danach filtern, wäre beim ersten Lauf die komplette ungelesene Privatpost heruntergeladen und als gelesen markiert. Zweitens matcht IMAP-`TO`/`CC`-SEARCH laut RFC 3501 nur als **Substring**, nicht exakt (Plus-Adressierung, Domain- oder Display-Namen-Treffer). Deshalb wird jede heruntergeladene Mail einzeln exakt geprüft und **nur bei echtem Treffer** als gelesen markiert; Substring-Kollisionen bleiben ungelesen. Ein pauschales `\Seen` nach dem Download wäre nicht rückgängig zu machen.
+  **Die Privatpost wird zweifach geschützt, und beide Schichten sind nötig.** Das System läuft auf dem privaten Postfach des Nutzers. Erstens muss die Alias-Einschränkung Teil der Suchanfrage sein — würde man alle ungelesenen Mails holen und erst danach filtern, wäre beim ersten Lauf die komplette ungelesene Privatpost heruntergeladen. Zweitens matcht IMAP-`TO`/`CC`-SEARCH laut RFC 3501 nur als **Substring**, nicht exakt (Plus-Adressierung, Domain- oder Display-Namen-Treffer). Deshalb wird jede heruntergeladene Mail einzeln exakt geprüft; Substring-Kollisionen werden verworfen und tauchen im Rückgabewert gar nicht erst auf — sie dürfen also auch später nie als `\Seen` markiert werden.
+
+  **Wichtige Korrektur gegenüber einer früheren Fassung: `\Seen` wird NICHT mehr beim Abholen gesetzt, sondern erst vom Aufrufer nach erfolgreicher Persistierung.** Ursprünglich markierte `fetchNewEmails` jede Alias-Treffer-Mail sofort als gelesen, direkt beim Download. Das Problem: Scheiterte das Speichern in der Datenbank danach (z.B. ein kaputter Anhang oder eine `NOT NULL`-Verletzung), war die Mail im Postfach bereits gelesen markiert, wurde beim nächsten Poll nicht mehr gesucht (`seen: false`) und existierte dann NIRGENDS mehr — der schlimmste denkbare Fehler für eine Mieter-Reparaturmeldung, und bei einem ganzen Batch verlor man sogar alle noch nicht verarbeiteten Mails danach. Die Lösung trennt die beiden Schritte: `fetchNewEmails` liefert `FetchedEmail[]` (UID + geparste Mail) zurück, OHNE irgendetwas zu markieren; die neue Funktion `markEmailsSeen(uids)` markiert explizit angegebene UIDs als `\Seen` und wird vom Aufrufer (`pollOnce` in Task 10) erst aufgerufen, NACHDEM die jeweilige Mail nachweislich in der DB steht.
 
   ```ts
   import { ImapFlow } from "imapflow";
@@ -3129,12 +3213,22 @@ Dünner IMAP-Abruf ungelesener Mails via imapflow. Die Verbindung selbst wird NI
   import { parseRawEmail } from "@/channel/parse";
   import type { IncomingEmail } from "@/channel/types";
 
+  /**
+   * Eine heruntergeladene, geparste Mail zusammen mit ihrer IMAP-UID.
+   * Die UID wird gebraucht, damit der Aufrufer (pollOnce) die Mail erst NACH
+   * erfolgreicher Persistierung als \Seen quittieren kann (siehe markEmailsSeen).
+   */
+  export interface FetchedEmail {
+    uid: number;
+    mail: IncomingEmail;
+  }
+
   export function filterToAlias(mails: IncomingEmail[], alias: string): IncomingEmail[] {
     const target = alias.toLowerCase();
     return mails.filter((mail) => mail.to.some((address) => address.toLowerCase() === target));
   }
 
-  export async function fetchNewEmails(): Promise<IncomingEmail[]> {
+  async function openConnection(): Promise<ImapFlow> {
     const env = getEnv();
     const client = new ImapFlow({
       host: env.IMAP_HOST,
@@ -3144,45 +3238,97 @@ Dünner IMAP-Abruf ungelesener Mails via imapflow. Die Verbindung selbst wird NI
       logger: false,
     });
     await client.connect();
+    return client;
+  }
 
-    const parsed: IncomingEmail[] = [];
-    const lock = await client.getMailboxLock("INBOX");
+  /**
+   * Holt neue Mails vom IMAP-Postfach, OHNE sie als gelesen zu markieren.
+   *
+   * Das Markieren als \Seen ist bewusst NICHT Teil dieser Funktion: eine Mail
+   * darf erst dann im Postfach als erledigt gelten, wenn sie beim Aufrufer
+   * tatsächlich erfolgreich gespeichert wurde. Würde hier schon markiert,
+   * bevor pollOnce die Mail in die Datenbank geschrieben hat, ginge eine Mail
+   * bei jedem Speicherfehler (z.B. ein kaputter Anhang) stillschweigend
+   * verloren: gelesen markiert, nie gespeichert, beim nächsten Poll nicht mehr
+   * geholt. Der Aufrufer muss stattdessen nach erfolgreicher Verarbeitung
+   * explizit markEmailsSeen() mit den UIDs der erfolgreich verarbeiteten
+   * Mails aufrufen.
+   */
+  export async function fetchNewEmails(): Promise<FetchedEmail[]> {
+    const env = getEnv();
+    const client = await openConnection();
+
+    // client.logout() steht in einem äußeren finally, das den gesamten Block ab
+    // hier umschließt: schlägt bereits getMailboxLock() fehl (nach erfolgreichem
+    // connect()), bliebe sonst eine offene IMAP-Sitzung zurück — bei einem
+    // Worker, der alle 30 Sekunden pollt, summiert sich das. Der Lock selbst
+    // wird weiterhin in einem eigenen, inneren finally freigegeben, damit
+    // lock.release() nie aufgerufen wird, wenn der Lock nie erworben wurde.
     try {
-      // Alias-Einschränkung MUSS hier stehen: Ohne sie würde die private Post
-      // des Nutzers heruntergeladen und als gelesen markiert.
-      const alias = env.MAIL_ALIAS;
-      const uids =
-        (await client.search(
-          { seen: false, or: [{ to: alias }, { cc: alias }] },
-          { uid: true },
-        )) || [];
-      for (const uid of uids) {
-        const { content } = await client.download(String(uid), undefined, { uid: true });
-        const chunks: Buffer[] = [];
-        for await (const chunk of content) {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      const fetched: FetchedEmail[] = [];
+      const lock = await client.getMailboxLock("INBOX");
+      try {
+        // Alias-Einschränkung MUSS hier stehen: Ohne sie würde die private Post
+        // des Nutzers heruntergeladen.
+        const alias = env.MAIL_ALIAS;
+        const uids =
+          (await client.search(
+            { seen: false, or: [{ to: alias }, { cc: alias }] },
+            { uid: true },
+          )) || [];
+        for (const uid of uids) {
+          const { content } = await client.download(String(uid), undefined, { uid: true });
+          const chunks: Buffer[] = [];
+          for await (const chunk of content) {
+            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+          }
+          const mail = await parseRawEmail(Buffer.concat(chunks));
+          // Nur echte Alias-Treffer verarbeiten. Die IMAP-Suche matcht als
+          // Substring; Kollisionen werden verworfen und bleiben ungelesen.
+          if (filterToAlias([mail], alias).length > 0) {
+            fetched.push({ uid, mail });
+          }
         }
-        const mail = await parseRawEmail(Buffer.concat(chunks));
-        // Nur echte Alias-Treffer verarbeiten UND als gelesen markieren.
-        // Die IMAP-Suche matcht als Substring; Kollisionen bleiben ungelesen.
-        if (filterToAlias([mail], alias).length > 0) {
-          parsed.push(mail);
-          await client.messageFlagsAdd(String(uid), ["\\Seen"], { uid: true });
-        }
+      } finally {
+        lock.release();
       }
+
+      return fetched;
     } finally {
-      lock.release();
       await client.logout();
     }
+  }
 
-    return parsed;
+  /**
+   * Markiert die übergebenen UIDs im IMAP-Postfach als \Seen. Wird vom
+   * Aufrufer erst NACH erfolgreicher Persistierung der jeweiligen Mail
+   * aufgerufen (siehe fetchNewEmails). Bei leerer Liste wird gar keine
+   * Verbindung aufgebaut.
+   */
+  export async function markEmailsSeen(uids: number[]): Promise<void> {
+    if (uids.length === 0) return;
+
+    const client = await openConnection();
+    // Gleiche Absicherung wie in fetchNewEmails(): client.logout() im äußeren
+    // finally, damit ein fehlschlagender Lock-Erwerb nach erfolgreichem
+    // connect() keine offene Verbindung hinterlässt.
+    try {
+      const lock = await client.getMailboxLock("INBOX");
+      try {
+        await client.messageFlagsAdd(uids, ["\\Seen"], { uid: true });
+      } finally {
+        lock.release();
+      }
+    } finally {
+      await client.logout();
+    }
   }
   ```
 
 - [ ] **Step 4: Tests ausführen, Erfolg verifizieren**
 
   Run: `npx vitest run tests/channel/imap.test.ts`
-  Expected: PASS (5 Tests grün)
+  Expected: PASS (5 Tests grün — nur `filterToAlias` ist hier unit-getestet; das Zusammenspiel von `fetchNewEmails`/`markEmailsSeen` mit Persistierungsfehlern wird in Task 10 über injizierte Fakes getestet, siehe dort)
 
 - [ ] **Step 5: Commit**
 
@@ -3523,7 +3669,7 @@ strukturell identische, **nicht exportierte** lokale Kopie.
   - `sendAndLogEmail(params: SendParams, send?: typeof sendSmtp): Promise<number>` aus `@/lib/outbound` (Task 5); `sendSmtp` (nur als Typ) aus `@/channel/smtp` (Task 5); Typ `OutgoingEmail` aus `@/channel/types` (Task 5, nur im Test)
   - `searchDocuments(query: string, limit?: number): DocumentHit[]` und `addDocument(filename: string, mimeType: string, data: Buffer): Promise<number>` (nur im Test) aus `@/lib/documents` (Task 7)
 - Produces (konsumiert von Task 9, `agent/run.ts`):
-  - `export interface AgentToolContext { kind; conversationId; triggerMessageId; tenant; contractor; ticketId; repliedToTenant; sendFn? }` — exakt wie im Vertrag; `ticketId` und `repliedToTenant` werden von den Tools mutiert
+  - `export interface AgentToolContext { kind; conversationId; triggerMessageId; tenant; contractor; ticketId; repliedToTenant; repliedToContractor?; sendFn? }` — exakt wie im Vertrag; `ticketId`, `repliedToTenant` und `repliedToContractor` werden von den Tools mutiert. `repliedToContractor` ist optional (statt required wie `repliedToTenant`), damit ältere Testfixtures ohne dieses Feld weiter kompilieren; Task 9 prüft nur per `!ctx.repliedToContractor`, wofür `undefined` bereits "nicht gesendet" bedeutet. Grund für das Feld: Task 9s Sicherheitsnetz für `landlord_answer` (siehe dort) muss erkennen können, ob `send_reply` überhaupt IRGENDEINEN Empfänger erreicht hat — nicht nur den Mieter.
   - `export interface AgentToolSpec { name: string; description: string; inputSchema: z.ZodType; run: (input: unknown) => Promise<string> }`
   - `export function buildAgentTools(ctx: AgentToolContext): AgentToolSpec[]` — genau 5 Tools in der Reihenfolge `search_documents`, `update_ticket`, `request_approval`, `ask_landlord`, `send_reply`
 
@@ -4059,9 +4205,17 @@ strukturell identische, **nicht exportierte** lokale Kopie.
     triggerMessageId: number;
     tenant: { id: number; name: string; email: string } | null;
     contractor: { id: number; name: string; email: string } | null;
-    ticketId: number | null;      // mutable: wird bei Ticket-Anlage gesetzt
-    repliedToTenant: boolean;     // mutable: send_reply(mieter) setzt true
-    sendFn?: typeof sendSmtp;     // Test-Injektion, an sendAndLogEmail durchgereicht
+    ticketId: number | null; // mutable: wird bei Ticket-Anlage gesetzt
+    repliedToTenant: boolean; // mutable: send_reply(mieter) setzt true
+    // mutable: send_reply(handwerker) setzt true. Optional (statt required wie
+    // repliedToTenant), damit bestehende Testfixtures, die AgentToolContext ohne
+    // dieses Feld konstruieren, weiter kompilieren — runAgentOnMessage (Task 9)
+    // prüft nur per `!ctx.repliedToContractor`, wofür `undefined` bereits "nicht
+    // gesendet" bedeutet. Ohne dieses Feld könnte das Sicherheitsnetz in Task 9
+    // eine Vermieter-Antwort, die per send_reply an den HANDWERKER ging, nicht
+    // von einer Vermieter-Antwort unterscheiden, auf die NIEMAND geantwortet hat.
+    repliedToContractor?: boolean;
+    sendFn?: typeof sendSmtp; // Test-Injektion, an sendAndLogEmail durchgereicht
   }
 
   export interface AgentToolSpec {
@@ -4466,6 +4620,8 @@ strukturell identische, **nicht exportierte** lokale Kopie.
           }
           if (args.recipient === "mieter") {
             ctx.repliedToTenant = true;
+          } else {
+            ctx.repliedToContractor = true;
           }
           return `E-Mail an ${args.recipient === "mieter" ? "den Mieter" : "den Handwerker"} (${to}) gesendet. Betreff: "${subject}".`;
         },
@@ -4477,7 +4633,7 @@ strukturell identische, **nicht exportierte** lokale Kopie.
 - [ ] **Step 4: Tests ausführen, Erfolg verifizieren**
 
   Run: `npx vitest run tests/agent/tools.test.ts`
-  Expected: PASS — 17 Tests grün, keine Fehlschläge.
+  Expected: PASS — 24 Tests grün, keine Fehlschläge (die ursprünglichen 17 plus zusätzliche Härtungstests, u.a. für `repliedToContractor` und die in Task 9 beschriebene Sicherheitsnetz-Erweiterung).
 
 - [ ] **Step 5: Commit**
 
@@ -4490,7 +4646,9 @@ strukturell identische, **nicht exportierte** lokale Kopie.
 
 ### Task 9: Agent-Kontext, Systemprompt und Runner
 
-Dieser Task baut die drei Bausteine, die einen Agent-Lauf pro eingehender Nachricht möglich machen: `agent/context.ts` lädt alle Fakten zur Trigger-Nachricht (Wer schreibt? Welches Ticket? Welcher Mieter/Handwerker?) und baut daraus den User-Content für die API (Gesprächsverlauf + neue Nachricht + Bild-Anhänge). `agent/prompt.ts` erzeugt den deutschen Systemprompt mit Stammdaten und den verbindlichen Regeln. `agent/run.ts` orchestriert einen kompletten Lauf: Message auf `processing` setzen, Kontext bauen, den Anthropic Tool Runner (`claude-opus-5`) mit den Tools aus Task 8 laufen lassen, Postconditions prüfen (Refusal-Eskalation, „keine Mieter-Antwort"-Eskalation) und Fehler mit Retry-Zählung abfangen. Der echte API-Aufruf ist über `deps.runTools` injizierbar, sodass alle Tests ohne Netzwerk laufen.
+Dieser Task baut die drei Bausteine, die einen Agent-Lauf pro eingehender Nachricht möglich machen: `agent/context.ts` lädt alle Fakten zur Trigger-Nachricht (Wer schreibt? Welches Ticket? Welcher Mieter/Handwerker?) und baut daraus den User-Content für die API (Gesprächsverlauf + neue Nachricht + Bild-Anhänge). `agent/prompt.ts` erzeugt den deutschen Systemprompt mit Stammdaten und den verbindlichen Regeln. `agent/run.ts` orchestriert einen kompletten Lauf: Message auf `processing` setzen, Kontext bauen, den Anthropic Tool Runner (`claude-opus-5`) mit den Tools aus Task 8 laufen lassen, Postconditions prüfen (Refusal-Eskalation, „keine Antwort gesendet"-Eskalation für Mieter-Nachrichten UND für Vermieter-Antworten, siehe unten) und Fehler mit Retry-Zählung abfangen. Der echte API-Aufruf ist über `deps.runTools` injizierbar, sodass alle Tests ohne Netzwerk laufen.
+
+**Sicherheitsnetz aus dem Review, bewusst auf `landlord_answer` erweitert:** Ursprünglich griff die „keine Antwort gesendet"-Eskalation NUR bei `trigger.kind === "tenant_message"`. Antwortet der Vermieter im Dashboard auf eine Eskalation (kind `landlord_answer`) und die KI sendet daraufhin keine E-Mail — z.B. weil die Eskalation aus einer Handwerker-Nachricht OHNE zugehöriges Ticket entstand und `loadTriggerInfo` deshalb keinen Mieter auflösen kann —, verpuffte die Vermieter-Antwort früher spurlos: keine Mail, keine Eskalation, keine Spur im Dashboard. Die Regel gilt jetzt auch für `landlord_answer` und prüft dafür `!ctx.repliedToTenant && !ctx.repliedToContractor` (siehe Task 8 für `repliedToContractor`), da eine Vermieter-Antwort je nach Fall an den Mieter ODER an den Handwerker gehen kann.
 
 **Files:**
 - Create: `src/agent/context.ts`
@@ -5654,7 +5812,15 @@ describe("runAgentOnMessage", () => {
     expect(message.processingAttempts).toBe(3);
   });
 
-  it("landlord_answer ohne send_reply → KEINE Eskalation (Regel gilt nur für tenant_message)", async () => {
+  // Sicherheitsnetz-Erweiterung aus dem Review: Ohne dieses Netz griff die
+  // "keine Antwort gesendet"-Regel NUR bei tenant_message. Antwortete der
+  // Vermieter im Dashboard auf eine Eskalation und die KI sendete daraufhin
+  // keine Mail (z.B. weil send_reply fehlschlug oder die KI schlicht nichts
+  // sendete), verpuffte diese spurlos, ohne dass es irgendwo auffiel. Der Test
+  // war vorher bewusst umgekehrt formuliert ("KEINE Eskalation ... Regel gilt
+  // nur für tenant_message") — genau das ist der behobene Bug, der Test
+  // dokumentiert jetzt das korrigierte Verhalten.
+  it("landlord_answer ohne send_reply → Eskalation an den Vermieter (Sicherheitsnetz greift jetzt auch hier)", async () => {
     const { tenantId, conversationId } = seedTenantWorld();
     const ticketId = Number(
       db
@@ -5678,7 +5844,98 @@ describe("runAgentOnMessage", () => {
 
     await runAgentOnMessage(msgId, { runTools: async () => ({ stopReason: "end_turn" }) });
 
+    const esc = db.select().from(escalations).all();
+    expect(esc).toHaveLength(1);
+    expect(esc[0].ticketId).toBe(ticketId);
+    expect(esc[0].conversationId).toBe(conversationId);
+    expect(esc[0].question).toContain(`#${msgId}`);
+    expect(esc[0].question).toContain(`[HV-${ticketId}]`);
+    expect(esc[0].question).toMatch(/manuell/);
+    expect(db.select().from(messages).where(eq(messages.id, msgId)).get()!.processingStatus).toBe("done");
+  });
+
+  it("landlord_answer MIT send_reply an den Mieter → keine Zusatz-Eskalation", async () => {
+    const { conversationId } = seedTenantWorld();
+    const msgId = insertMessage({
+      conversationId,
+      role: "landlord",
+      fromEmail: "vermieter@dashboard.intern",
+      body: "Antwort des Vermieters: bitte Standardvorgehen.",
+    });
+    const sendFn = async (): Promise<void> => {};
+
+    const runTools = async ({ toolSpecs }: RunToolsParams): Promise<{ stopReason: string | null }> => {
+      const byName = new Map(toolSpecs.map((s) => [s.name, s]));
+      const r = await byName.get("send_reply")!.run({
+        recipient: "mieter",
+        subject: "Ihre Anfrage",
+        body: "Guten Tag, es gilt das Standardvorgehen.\n\nIhre Hausverwaltung (KI-Assistent)",
+      });
+      expect(r).not.toMatch(/^FEHLER/);
+      return { stopReason: "end_turn" };
+    };
+
+    await runAgentOnMessage(msgId, { runTools, sendFn });
+
     expect(db.select().from(escalations).all()).toHaveLength(0);
+  });
+
+  // Exakte Reproduktion des im Review nachgewiesenen Falls: Eine Eskalation
+  // entsteht aus einer Handwerker-Nachricht OHNE zugehöriges Ticket (z.B. eine
+  // allgemeine Rückfrage per ask_landlord, noch bevor ein Ticket angelegt
+  // wurde). answerEscalation() legt die synthetische Vermieter-Antwort in
+  // GENAU dieser Conversation ab — einer Handwerker-Conversation
+  // (counterpartType "contractor"), ticketId null. loadTriggerInfo() kann für
+  // landlord_answer ohne Ticket nur über eine tenant-Conversation einen Mieter
+  // auflösen; hier bleibt ctx.tenant also null, send_reply(mieter) liefert nur
+  // "FEHLER: Kein Mieter im Kontext" — ohne das Sicherheitsnetz verschwindet
+  // die Vermieter-Antwort dann spurlos.
+  it("landlord_answer aus einer Handwerker-Eskalation OHNE Ticket: Mieter-Bezug fehlt, Sicherheitsnetz eskaliert an den Vermieter", async () => {
+    const contractorId = Number(
+      db
+        .insert(contractors)
+        .values({ name: "Sven Schloss", email: "sven.schloss@example.com", trade: "Schlüsseldienst" })
+        .run().lastInsertRowid,
+    );
+    const contractorConvId = Number(
+      db
+        .insert(conversations)
+        .values({
+          counterpartType: "contractor",
+          counterpartId: contractorId,
+          counterpartEmail: "sven.schloss@example.com",
+        })
+        .run().lastInsertRowid,
+    );
+    const msgId = insertMessage({
+      conversationId: contractorConvId,
+      role: "landlord",
+      fromEmail: "vermieter@dashboard.intern",
+      subject: "Antwort des Vermieters",
+      body:
+        'Antwort des Vermieters auf die Rückfrage "Übernehmen wir die Anfahrt?": Ja.\n' +
+        "Bitte formuliere daraus eine Antwort an den Mieter.",
+      // ticketId bewusst nicht gesetzt (null) — genau der Bug-Auslöser.
+    });
+
+    const runTools = async ({ toolSpecs }: RunToolsParams): Promise<{ stopReason: string | null }> => {
+      const byName = new Map(toolSpecs.map((s) => [s.name, s]));
+      const r = await byName.get("send_reply")!.run({
+        recipient: "mieter",
+        subject: "Ihre Anfrage",
+        body: "Guten Tag, wir übernehmen die Anfahrt.\n\nIhre Hausverwaltung (KI-Assistent)",
+      });
+      expect(r).toContain("FEHLER: Kein Mieter im Kontext");
+      return { stopReason: "end_turn" };
+    };
+
+    await runAgentOnMessage(msgId, { runTools });
+
+    const esc = db.select().from(escalations).all();
+    expect(esc).toHaveLength(1);
+    expect(esc[0].ticketId).toBeNull();
+    expect(esc[0].conversationId).toBe(contractorConvId);
+    expect(esc[0].question).toContain(`#${msgId}`);
     expect(db.select().from(messages).where(eq(messages.id, msgId)).get()!.processingStatus).toBe("done");
   });
 });
@@ -5752,6 +6009,7 @@ export async function runAgentOnMessage(messageId: number, deps: AgentRunDeps = 
         : null,
       ticketId: trigger.ticket?.id ?? null,
       repliedToTenant: false,
+      repliedToContractor: false,
       sendFn: deps.sendFn,
     };
     const toolSpecs = buildAgentTools(ctx);
@@ -5781,6 +6039,35 @@ export async function runAgentOnMessage(messageId: number, deps: AgentRunDeps = 
         .run();
     }
 
+    // Sicherheitsnetz auch für landlord_answer: Ohne dieses greift es NUR bei
+    // tenant_message, sodass eine Vermieter-Antwort spurlos verpufft, wenn die
+    // KI danach niemandem antwortet. Das passiert konkret, wenn eine Eskalation
+    // aus einer Handwerker-Nachricht OHNE zugehöriges Ticket entstand: die
+    // synthetische Vermieter-Antwort landet dann in der Handwerker-Conversation
+    // (counterpartType "contractor"), loadTriggerInfo() kann darüber keinen
+    // Mieter auflösen, ctx.tenant bleibt null, und send_reply(mieter) liefert
+    // nur "FEHLER: Kein Mieter im Kontext" zurück — ohne dieses Netz würde die
+    // Antwort des Vermieters dann einfach verschwinden, ohne dass es irgendwo
+    // auffällt.
+    if (
+      trigger.kind === "landlord_answer" &&
+      !ctx.repliedToTenant &&
+      !ctx.repliedToContractor
+    ) {
+      const vorgang = ctx.ticketId !== null ? ` (Vorgang [HV-${ctx.ticketId}])` : "";
+      db.insert(escalations)
+        .values({
+          ticketId: ctx.ticketId,
+          conversationId: ctx.conversationId,
+          question:
+            `Ihre Antwort als Vermieter (Nachricht #${messageId}${vorgang}) konnte die KI ` +
+            `nicht in eine Antwort an Mieter oder Handwerker umsetzen — es wurde keine ` +
+            `E-Mail versendet. Bitte prüfen Sie den Vorgang manuell und fassen Sie ` +
+            `gegebenenfalls selbst nach.`,
+        })
+        .run();
+    }
+
     db.update(messages)
       .set({ processingStatus: "done", processingError: null })
       .where(eq(messages.id, messageId))
@@ -5802,7 +6089,7 @@ export async function runAgentOnMessage(messageId: number, deps: AgentRunDeps = 
 - [ ] **Step 14: Tests ausführen, Erfolg verifizieren**
 
 Run: `npx vitest run tests/agent/run.test.ts`
-Expected: PASS (7 Tests grün — die 5 Basisfälle plus die beiden Golden-Szenarien zum Handwerker-Termin). Zusätzlich Gesamtlauf: `npx vitest run tests/agent/` — Expected: PASS (36 Tests grün; der Ordner enthält auch die 17 Tool-Tests aus Task 8 und die Kontext-/Prompt-Tests).
+Expected: PASS (9 Tests grün — die Basisfälle, die beiden Golden-Szenarien zum Handwerker-Termin, und die drei `landlord_answer`-Sicherheitsnetz-Tests). Zusätzlich Gesamtlauf: `npx vitest run tests/agent/` — Expected: PASS (alle Tests grün; der Ordner enthält auch die Tool-Tests aus Task 8 und die Kontext-/Prompt-Tests).
 
 - [ ] **Step 15: Commit**
 
@@ -5831,21 +6118,21 @@ Der Worker ist der langlaufende Prozess, der eingehende Mails vom IMAP-Postfach 
   - `extractTicketId(subject: string | null | undefined): number | null` aus `@/lib/subject` (Task 4)
   - `isWorkerPaused(): boolean` und `WORKER_PAUSED_KEY` aus `@/lib/rateLimit` (Task 4)
   - `runAgentOnMessage(messageId: number, deps?: AgentRunDeps): Promise<void>` und `type AgentRunDeps` aus `@/agent/run` (Task 9)
-  - `fetchNewEmails(): Promise<IncomingEmail[]>` aus `@/channel/imap` (Task 6)
+  - `fetchNewEmails(): Promise<FetchedEmail[]>`, `markEmailsSeen(uids: number[]): Promise<void>`, `type FetchedEmail` aus `@/channel/imap` (Task 6)
   - `type IncomingEmail` aus `@/channel/types` (Task 5)
   - Nur im Test: `makeTestDb(): AppDb` aus `tests/helpers/db.ts` (Task 2), `createTicket(...)` aus `@/lib/tickets` (Task 3), `setSetting(key, value)` aus `@/lib/settings` (Task 2)
 - Produces:
   - `ingestEmail(mail: IncomingEmail): Promise<number | null>` aus `@/worker/processor` — genutzt von `scripts/smoke.ts` (Task 17)
   - `processPendingMessages(deps?: AgentRunDeps): Promise<void>` aus `@/worker/processor` — genutzt von `scripts/smoke.ts` (Task 17)
-  - `pollOnce(deps?: { fetch?: typeof fetchNewEmails; agent?: AgentRunDeps }): Promise<void>` aus `@/worker/processor` — genutzt von `src/worker/index.ts`
+  - `pollOnce(deps?: { fetch?: typeof fetchNewEmails; markSeen?: typeof markEmailsSeen; agent?: AgentRunDeps }): Promise<void>` aus `@/worker/processor` — genutzt von `src/worker/index.ts`. Quittiert JEDE Mail einzeln erst nach erfolgreichem `ingestEmail`; ein Speicherfehler bei einer Mail bricht die Verarbeitung der übrigen Mails des Batches nicht mehr ab (siehe Step 3).
   - `src/worker/index.ts` — Einstiegspunkt für `npm run worker` (keine Exporte)
 
 - [ ] **Step 1: Fehlschlagenden Test schreiben**
 
-  Datei `tests/worker/processor.test.ts` anlegen. `ATTACHMENTS_DIR` zeigt pro Test auf ein frisches `mkdtemp`-Verzeichnis; der Agent wird über `AgentRunDeps` mit einem `runTools`-Zähler gefaked (kein API-Aufruf), `fetchNewEmails` über den `fetch`-Parameter von `pollOnce`.
+  Datei `tests/worker/processor.test.ts` anlegen. `ATTACHMENTS_DIR` zeigt pro Test auf ein frisches `mkdtemp`-Verzeichnis; der Agent wird über `AgentRunDeps` mit einem `runTools`-Zähler gefaked (kein API-Aufruf), `fetchNewEmails`/`markEmailsSeen` über die `fetch`-/`markSeen`-Parameter von `pollOnce`.
 
   ```ts
-  import { describe, it, expect, beforeEach, afterEach } from "vitest";
+  import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
   import fs from "node:fs";
   import os from "node:os";
   import path from "node:path";
@@ -5976,6 +6263,24 @@ Der Worker ist der langlaufende Prozess, der eingehende Mails vom IMAP-Postfach 
       expect(msg.processingStatus).toBe("pending");
     });
 
+    // Review-Befund: Ohne .trim() auf mail.from wurde ein bekannter Mieter mit
+    // umgebenden Leerzeichen in der Absenderadresse (z.B. durch einen
+    // eigenwillig kopierten Mail-Header) fälschlich als role "unknown"
+    // eingestuft — die Nachricht wäre dann NIE beantwortet worden.
+    it("klassifiziert einen bekannten Mieter trotz umgebender Leerzeichen in der Absenderadresse korrekt", async () => {
+      seedTenant();
+      const id = await ingestEmail(
+        makeMail({
+          from: "  max.mustermann@example.com  ",
+          messageId: "<msg-whitespace@example.com>",
+        }),
+      );
+      const msg = db.select().from(messages).where(eq(messages.id, id!)).get()!;
+      expect(msg.role).toBe("tenant");
+      expect(msg.processingStatus).toBe("pending");
+      expect(msg.fromEmail).toBe("max.mustermann@example.com");
+    });
+
     it("legt unbekannte Absender als role 'unknown' mit Status 'done' ab — kein Agent-Lauf", async () => {
       const id = await ingestEmail(
         makeMail({ from: "fremd@example.com", messageId: "<msg-3@example.com>" }),
@@ -6083,6 +6388,42 @@ Der Worker ist der langlaufende Prozess, der eingehende Mails vom IMAP-Postfach 
       expect(row.filePath).toBe(path.join(messageDir, ".._.._evil.sh"));
       expect(fs.existsSync(row.filePath)).toBe(true);
     });
+
+    // Bekannter Auslöser des Important-Befunds: ein Anhang mit sehr langem
+    // Dateinamen löste in fs.writeFileSync ein unbehandeltes ENAMETOOLONG aus,
+    // das aus ingestEmail herauspropagierte und (vor dem Fix) die komplette
+    // pollOnce-Schleife abbrach. sanitizeFilename kürzt jetzt auf eine sichere
+    // Länge — die Endung bleibt dabei erhalten, damit die Datei später noch
+    // zugeordnet werden kann.
+    it("kürzt einen sehr langen Dateinamen (500 Zeichen) auf eine sichere Länge, behält aber die Endung", async () => {
+      seedTenant();
+      const longName = "a".repeat(500) + ".pdf";
+      const content = Buffer.from("harmloser pdf-inhalt");
+      const id = await ingestEmail(
+        makeMail({
+          messageId: "<msg-longname@example.com>",
+          attachments: [{ filename: longName, mimeType: "application/pdf", content }],
+        }),
+      );
+      expect(id).not.toBeNull();
+
+      const row = db
+        .select()
+        .from(attachments)
+        .where(eq(attachments.messageId, id!))
+        .get()!;
+      const messageDir = path.resolve(attachmentsDir, String(id));
+
+      // Datei liegt innerhalb von ATTACHMENTS_DIR und wurde erfolgreich geschrieben.
+      expect(row.filePath.startsWith(messageDir + path.sep)).toBe(true);
+      expect(fs.existsSync(row.filePath)).toBe(true);
+      expect(fs.readFileSync(row.filePath, "utf8")).toBe("harmloser pdf-inhalt");
+
+      // Die Endung bleibt erhalten, der Dateiname selbst ist sicher kurz.
+      const writtenName = path.basename(row.filePath);
+      expect(writtenName.endsWith(".pdf")).toBe(true);
+      expect(writtenName.length).toBeLessThanOrEqual(200);
+    });
   });
 
   describe("processPendingMessages", () => {
@@ -6168,27 +6509,149 @@ Der Worker ist der langlaufende Prozess, der eingehende Mails vom IMAP-Postfach 
       expect(fake.calls()).toBe(0);
     });
 
-    it("normaler Durchlauf: fetch → ingest → Verarbeitung", async () => {
+    it("normaler Durchlauf: fetch → ingest → Verarbeitung, UID wird nach Erfolg quittiert", async () => {
       seedTenant();
       let fetchCalls = 0;
+      const seenUids: number[] = [];
       const fake = makeAgentFake();
 
       await pollOnce({
         fetch: async () => {
           fetchCalls++;
-          return [makeMail()];
+          return [{ uid: 42, mail: makeMail() }];
+        },
+        markSeen: async (uids) => {
+          seenUids.push(...uids);
         },
         agent: fake.deps,
       });
 
       expect(fetchCalls).toBe(1);
       expect(fake.calls()).toBe(1);
+      expect(seenUids).toEqual([42]);
       const msg = db
         .select()
         .from(messages)
         .where(eq(messages.imapMessageId, "<msg-1@example.com>"))
         .get()!;
       expect(msg.processingStatus).toBe("done");
+    });
+
+    // Regressionstest für den Important-Befund: fetchNewEmails() markierte Mails
+    // früher schon beim Abholen als \Seen, BEVOR sie in der DB standen. Schlug
+    // das Speichern danach fehl (z.B. durch einen kaputten Anhang), war die Mail
+    // im Postfach gelesen markiert, wurde beim nächsten Poll nicht mehr geholt
+    // und existierte nirgends — der schlimmste denkbare Fehler für eine
+    // Mieter-Reparaturmeldung. Der Fix: \Seen wird erst NACH erfolgreicher
+    // Persistierung gesetzt (markEmailsSeen, separat von fetchNewEmails), UND
+    // pollOnce fängt Fehler PRO MAIL ab, damit eine kaputte Mail nicht die
+    // gesamte for-Schleife abbricht und dabei die nachfolgenden, noch nicht
+    // verarbeiteten Mails des Batches mit sich reißt.
+    //
+    // Die kaputte Mail hier hat `text: undefined` statt eines Strings — ein
+    // realistischer Fall für eine unvollständig geparste/korrupte Mail (z.B.
+    // ein zukünftiger zweiter Kanal mit lockerer Validierung), der die
+    // NOT-NULL-Spalte `messages.body` verletzt: der INSERT selbst schlägt mit
+    // einem echten, unbehandelten SqliteError fehl, BEVOR irgendeine Zeile
+    // committet wird — die Mail landet also nachweislich nirgends in der DB.
+    //
+    // Die kaputte Mail wird ABSICHTLICH VOR der guten Mail im Batch platziert,
+    // um zu beweisen, dass ein früher Fehler die späteren Mails nicht mehr
+    // mitreißt (das war exakt die alte Schleifenabbruch-Regression).
+    it("Speicherfehler bei einer Mail: sie bleibt ungelesen, die übrigen Mails des Batches werden trotzdem verarbeitet und quittiert", async () => {
+      seedTenant();
+      const brokenMail = makeMail({
+        messageId: "<msg-broken@example.com>",
+        text: undefined as unknown as string,
+      });
+      const goodMail = makeMail({ messageId: "<msg-ok@example.com>" });
+      const seenUids: number[] = [];
+      const fake = makeAgentFake();
+      const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      await pollOnce({
+        fetch: async () => [
+          { uid: 11, mail: brokenMail },
+          { uid: 10, mail: goodMail },
+        ],
+        markSeen: async (uids) => {
+          seenUids.push(...uids);
+        },
+        agent: fake.deps,
+      });
+
+      // Nur die erfolgreich gespeicherte Mail wird quittiert; die kaputte Mail
+      // bleibt ungelesen und wird beim nächsten Poll erneut versucht.
+      expect(seenUids).toEqual([10]);
+      expect(seenUids).not.toContain(11);
+
+      // Die kaputte Mail existiert nirgends in der DB (kein halb gespeicherter
+      // Zustand) — der INSERT ist an der NOT-NULL-Constraint gescheitert, bevor
+      // irgendetwas committet wurde.
+      const brokenMsg = db
+        .select()
+        .from(messages)
+        .where(eq(messages.imapMessageId, "<msg-broken@example.com>"))
+        .get();
+      expect(brokenMsg).toBeUndefined();
+
+      // Die gute Mail — obwohl NACH der kaputten im Batch — wurde trotzdem
+      // persistiert und verarbeitet (kein Schleifenabbruch mehr).
+      const okMsg = db
+        .select()
+        .from(messages)
+        .where(eq(messages.imapMessageId, "<msg-ok@example.com>"))
+        .get();
+      expect(okMsg).toBeTruthy();
+      expect(okMsg!.processingStatus).toBe("done");
+      expect(fake.calls()).toBe(1);
+
+      // Der Fehler wurde geloggt, mit UID und Absender, damit man die Mail im
+      // Postfach wiederfindet.
+      expect(consoleErrorSpy).toHaveBeenCalled();
+      const loggedText = consoleErrorSpy.mock.calls.map((call) => call.join(" ")).join(" ");
+      expect(loggedText).toContain("11");
+      expect(loggedText).toContain("max.mustermann@example.com");
+
+      consoleErrorSpy.mockRestore();
+    });
+
+    // Review-Befund: markSeenFn() stand ohne eigenes try/catch VOR
+    // processPendingMessages(). Warf das Quittieren (z.B. ein abgebrochener
+    // IMAP-Verbindungsaufbau), erreichte processPendingMessages() diesen
+    // Durchlauf gar nicht mehr — bereits sicher gespeicherte Nachrichten blieben
+    // liegen, obwohl an ihrer Verarbeitung nichts hinderte. Kein Datenverlust:
+    // nicht quittierte Mails werden beim nächsten Poll erneut geholt und über
+    // die Message-ID dedupliziert (siehe ingestEmail).
+    it("Quittierungsfehler (markSeen wirft): gespeicherte Nachrichten werden trotzdem verarbeitet", async () => {
+      seedTenant();
+      const fake = makeAgentFake();
+      const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      await pollOnce({
+        fetch: async () => [{ uid: 42, mail: makeMail() }],
+        markSeen: async () => {
+          throw new Error("IMAP-Verbindung abgebrochen");
+        },
+        agent: fake.deps,
+      });
+
+      // Die Nachricht wurde trotz gescheitertem Quittieren gespeichert UND verarbeitet.
+      const msg = db
+        .select()
+        .from(messages)
+        .where(eq(messages.imapMessageId, "<msg-1@example.com>"))
+        .get();
+      expect(msg).toBeTruthy();
+      expect(msg!.processingStatus).toBe("done");
+      expect(fake.calls()).toBe(1);
+
+      // Der Quittierungsfehler wurde geloggt, statt den restlichen Durchlauf zu blockieren.
+      expect(consoleErrorSpy).toHaveBeenCalled();
+      const loggedText = consoleErrorSpy.mock.calls.map((call) => call.join(" ")).join(" ");
+      expect(loggedText).toContain("IMAP-Verbindung abgebrochen");
+
+      consoleErrorSpy.mockRestore();
     });
   });
   ```
@@ -6211,21 +6674,46 @@ Der Worker ist der langlaufende Prozess, der eingehende Mails vom IMAP-Postfach 
   import { attachments, contractors, messages, tenants, tickets } from "@/db/schema";
   import { getEnv } from "@/env";
   import type { IncomingEmail } from "@/channel/types";
-  import { fetchNewEmails } from "@/channel/imap";
+  import { fetchNewEmails, markEmailsSeen, type FetchedEmail } from "@/channel/imap";
   import { findOrCreateConversation, touchConversation } from "@/lib/conversations";
   import { extractTicketId } from "@/lib/subject";
   import { isWorkerPaused } from "@/lib/rateLimit";
   import { runAgentOnMessage, type AgentRunDeps } from "@/agent/run";
 
+  // Sichere Obergrenze für Dateinamen (Dateisystemgrenzen liegen typischerweise
+  // bei 255 Bytes pro Pfadsegment; 200 lässt Luft für Mehrbyte-Zeichen, die
+  // hier zwar durch die Allowlist ohnehin ausgeschlossen sind, aber als
+  // Sicherheitsabstand beibehalten werden). Ein zu langer Dateiname löst sonst
+  // ein unbehandeltes ENAMETOOLONG in fs.writeFileSync aus (siehe pollOnce).
+  const MAX_FILENAME_LENGTH = 200;
+  // Endungen jenseits dieser Länge gelten als entartet (z.B. ein Angriffsname
+  // ohne echten Punkt-Trenner) und werden beim Kürzen verworfen statt erhalten.
+  const MAX_EXTENSION_LENGTH = 20;
+
   /**
    * Dateinamen auf [a-zA-Z0-9._-] reduzieren; alles andere wird '_'.
    * Degenerierte Ergebnisse ("", ".", "..") werden zu "_", damit path.join
    * niemals aus dem Message-Ordner ausbrechen kann.
+   *
+   * Zusätzlich wird auf MAX_FILENAME_LENGTH gekürzt, damit ein pathologisch
+   * langer Dateiname nicht zu einem unbehandelten ENAMETOOLONG in
+   * fs.writeFileSync führt — genau der Auslöser, der eine Mail beim
+   * anschließenden Speicherfehler stumm verschwinden ließ (siehe Important-
+   * Befund unten bei pollOnce). Die Dateiendung bleibt beim Kürzen erhalten,
+   * damit die Datei später noch zugeordnet werden kann (z.B. weiterhin als
+   * ".pdf" erkennbar ist).
    */
   function sanitizeFilename(filename: string): string {
     const sanitized = filename.replace(/[^a-zA-Z0-9._-]/g, "_");
     if (sanitized === "" || sanitized === "." || sanitized === "..") return "_";
-    return sanitized;
+    if (sanitized.length <= MAX_FILENAME_LENGTH) return sanitized;
+
+    const ext = path.extname(sanitized);
+    const safeExt = ext.length > 0 && ext.length <= MAX_EXTENSION_LENGTH ? ext : "";
+    const base = safeExt ? sanitized.slice(0, sanitized.length - safeExt.length) : sanitized;
+    const truncatedBase = base.slice(0, MAX_FILENAME_LENGTH - safeExt.length);
+    const truncated = `${truncatedBase}${safeExt}`;
+    return truncated === "" || truncated === "." || truncated === ".." ? "_" : truncated;
   }
 
   export async function ingestEmail(mail: IncomingEmail): Promise<number | null> {
@@ -6240,8 +6728,12 @@ Der Worker ist der langlaufende Prozess, der eingehende Mails vom IMAP-Postfach 
       .get();
     if (existing) return null;
 
-    // 2. Rollen-Klassifikation über die Absenderadresse (DB speichert lowercase)
-    const from = mail.from.toLowerCase();
+    // 2. Rollen-Klassifikation über die Absenderadresse (DB speichert lowercase,
+    //    getrimmt). .trim() wie in src/lib/recipients.ts: ohne diesen Trim würde
+    //    eine Absenderadresse mit Leerzeichen-Umgebung fälschlich als
+    //    unbekannter Absender (role "unknown") eingestuft, obwohl Mieter oder
+    //    Handwerker mit genau dieser (getrimmten) Adresse hinterlegt sind.
+    const from = mail.from.trim().toLowerCase();
     const tenant = db.select().from(tenants).where(eq(tenants.email, from)).get();
     const contractor = tenant
       ? undefined
@@ -6349,24 +6841,66 @@ Der Worker ist der langlaufende Prozess, der eingehende Mails vom IMAP-Postfach 
 
   export async function pollOnce(deps?: {
     fetch?: typeof fetchNewEmails;
+    markSeen?: typeof markEmailsSeen;
     agent?: AgentRunDeps;
   }): Promise<void> {
     if (isWorkerPaused()) return;
 
     const fetchFn = deps?.fetch ?? fetchNewEmails;
-    const mails = await fetchFn();
-    for (const mail of mails) {
-      await ingestEmail(mail);
+    const markSeenFn = deps?.markSeen ?? markEmailsSeen;
+    const fetched: FetchedEmail[] = await fetchFn();
+
+    // Jede Mail wird EINZELN abgesichert: eine eingehende Mail darf nie
+    // stumm verloren gehen. Scheitert das Speichern einer Mail (z.B. ein
+    // kaputter Anhang), darf das weder die übrigen Mails desselben Batches
+    // mitreißen noch dazu führen, dass die gescheiterte Mail als gelesen
+    // markiert wird — sie bleibt ungelesen und wird beim nächsten Poll erneut
+    // versucht. Das kann bei einer dauerhaft kaputten Mail zu wiederholten
+    // Versuchen führen; für den PoC ist das akzeptabel und dem stillen
+    // Verlust klar vorzuziehen. Der Fehler wird daher lautstark geloggt (UID +
+    // Absender), damit ein solcher Fall im Log auffällt und die Mail im
+    // Postfach wiedergefunden werden kann.
+    const seenUids: number[] = [];
+    for (const { uid, mail } of fetched) {
+      try {
+        await ingestEmail(mail);
+        seenUids.push(uid);
+      } catch (err) {
+        console.error(
+          `[worker] Mail konnte nicht gespeichert werden — bleibt ungelesen und wird erneut versucht ` +
+            `(uid=${uid}, from=${mail.from}, subject=${JSON.stringify(mail.subject)}):`,
+          err,
+        );
+      }
+    }
+
+    // Das Quittieren wird bewusst eigens abgesichert: Scheitert es (z.B. durch
+    // einen abgebrochenen IMAP-Verbindungsaufbau), sollen die bereits sicher in
+    // der DB gespeicherten Nachrichten TROTZDEM verarbeitet werden — sie stehen
+    // ja schon fest in der DB, unabhängig davon, ob das Postfach sie noch als
+    // ungelesen führt. Kein Datenrisiko: nicht quittierte Mails werden beim
+    // nächsten Poll erneut geholt und über die Message-ID-Deduplizierung in
+    // ingestEmail() automatisch übersprungen.
+    try {
+      await markSeenFn(seenUids);
+    } catch (err) {
+      console.error(
+        `[worker] Quittieren als gelesen fehlgeschlagen (uids=${JSON.stringify(seenUids)}) — ` +
+          `werden beim nächsten Poll erneut abgeholt und über die Message-ID dedupliziert:`,
+        err,
+      );
     }
     await processPendingMessages(deps?.agent);
   }
   ```
 
+  **Wichtige Korrektur gegenüber einer früheren Fassung.** Ursprünglich lief `pollOnce` als eine einzige `for`-Schleife ohne `try/catch` um `ingestEmail`, und `fetchNewEmails` markierte Mails bereits beim Herunterladen als `\Seen` (siehe Task 6). Beide Punkte zusammen konnten eine Mail dauerhaft verlieren: Schlug `ingestEmail` für eine Mail mitten im Batch fehl (z.B. ein kaputter Anhang oder eine `NOT NULL`-Verletzung), brach die Schleife komplett ab — alle noch nicht verarbeiteten Mails desselben Batches wurden gar nicht erst versucht, obwohl sie im Postfach bereits als gelesen galten. Die jetzige Fassung behebt das über drei unabhängige Absicherungen: (1) `try/catch` um jede einzelne Mail, damit ein Fehler nur diese eine Mail betrifft; (2) `\Seen` wird nicht mehr beim Abholen, sondern erst hier — und nur für tatsächlich erfolgreich gespeicherte UIDs — über `markEmailsSeen` gesetzt; (3) auch das Quittieren selbst steht in einem eigenen `try/catch`, damit ein IMAP-Fehler beim Markieren nicht verhindert, dass bereits sicher gespeicherte Nachrichten weiterverarbeitet werden.
+
 - [ ] **Step 4: Tests ausführen, Erfolg verifizieren**
 
   Run: `npx vitest run tests/worker/processor.test.ts`
 
-  Expected: PASS — 13 Tests grün.
+  Expected: PASS — 17 Tests grün.
 
 - [ ] **Step 5: Commit**
 
@@ -6460,6 +6994,7 @@ Auth (Passwort-Login mit Cookie), Middleware-Schutz, Navigation mit Badge-Zähle
 - Modify: `src/app/layout.tsx` (Platzhalter aus Task 1 vollständig ersetzen)
 - Modify: `src/app/page.tsx` (Platzhalter aus Task 1 vollständig ersetzen)
 - Test: `tests/lib/auth.test.ts`
+- Test: `tests/middleware.test.ts`
 
 **Interfaces:**
 - Consumes:
@@ -6469,7 +7004,7 @@ Auth (Passwort-Login mit Cookie), Middleware-Schutz, Navigation mit Badge-Zähle
   - `isWorkerPaused(): boolean` und `resumeWorker(): void` aus `@/lib/rateLimit` (Task 4)
   - `count`, `desc`, `eq` aus `drizzle-orm`
 - Produces:
-  - `AUTH_COOKIE = "hv_auth"` und `sha256Hex(input: string): Promise<string>` aus `@/lib/auth` (Edge-kompatibel, nur Web Crypto — wird von Middleware und Auth-Actions genutzt)
+  - `AUTH_COOKIE = "hv_auth"`, `sha256Hex(input: string): Promise<string>` und `getExpectedAuthCookie(rawPassword: string | undefined): Promise<string | null>` aus `@/lib/auth` (Edge-kompatibel, nur Web Crypto — wird von Middleware und Auth-Actions genutzt). `getExpectedAuthCookie` liefert `null`, wenn kein brauchbares Passwort konfiguriert ist (fehlt oder ist auch nach `trim()` leer) — fail-closed, damit niemals gegen `sha256("")` verglichen wird.
   - `requireAuth(): Promise<void>`, `login(formData: FormData): Promise<void>`, `logout(): Promise<void>` aus `@/app/actions/auth` — **jede** Server Action der Tasks 12–16 beginnt mit `await requireAuth()`
   - `resumeWorkerAction(): Promise<void>` aus `@/app/actions/worker`
   - `StatusBadge({ status }: { status: string })` aus `@/app/components/StatusBadge` (named **und** default Export) — genutzt von Tasks 14/15
@@ -6483,7 +7018,7 @@ Hinweis zur Teststrategie: Unit-getestet werden nur die Auth-Helfer (`sha256Hex`
 
   ```ts
   import { describe, expect, it } from "vitest";
-  import { AUTH_COOKIE, sha256Hex } from "@/lib/auth";
+  import { AUTH_COOKIE, getExpectedAuthCookie, sha256Hex } from "@/lib/auth";
 
   describe("auth-Helfer", () => {
     it("AUTH_COOKIE heißt hv_auth", () => {
@@ -6502,6 +7037,39 @@ Hinweis zur Teststrategie: Unit-getestet werden nur die Auth-Helfer (`sha256Hex`
       expect(a).toMatch(/^[0-9a-f]{64}$/);
       expect(b).toMatch(/^[0-9a-f]{64}$/);
       expect(a).not.toBe(b);
+    });
+  });
+
+  // Critical-Befund aus dem Review: Ohne getExpectedAuthCookie() verglich die
+  // Middleware direkt gegen sha256(process.env.DASHBOARD_PASSWORD ?? ""). Fehlte
+  // die Variable oder war sie leer, war der erwartete Wert sha256("") — ein
+  // öffentlich bekannter, konstanter Hash (e3b0c442...), den jeder ohne
+  // Passwortkenntnis in sein Cookie schreiben konnte. Damit kam JEDER ins
+  // Dashboard, sobald DASHBOARD_PASSWORD in der Deploy-Umgebung vergessen wurde.
+  describe("getExpectedAuthCookie (fail-closed)", () => {
+    it("liefert null, wenn die Variable nicht gesetzt ist (undefined)", async () => {
+      expect(await getExpectedAuthCookie(undefined)).toBeNull();
+    });
+
+    it("liefert null bei leerem String", async () => {
+      expect(await getExpectedAuthCookie("")).toBeNull();
+    });
+
+    it("liefert null bei einem Wert, der nur aus Leerraum besteht", async () => {
+      expect(await getExpectedAuthCookie("   ")).toBeNull();
+      expect(await getExpectedAuthCookie("\t\n")).toBeNull();
+    });
+
+    it("liefert NICHT den Hash von sha256('') als Ersatzwert", async () => {
+      const emptyHash = await sha256Hex("");
+      const result = await getExpectedAuthCookie("");
+      expect(result).not.toBe(emptyHash);
+      expect(result).toBeNull();
+    });
+
+    it("liefert sha256Hex(passwort) bei einem gesetzten, nicht-leeren Passwort", async () => {
+      const expected = await getExpectedAuthCookie("mein-geheimes-passwort");
+      expect(expected).toBe(await sha256Hex("mein-geheimes-passwort"));
     });
   });
   ```
@@ -6525,12 +7093,34 @@ Hinweis zur Teststrategie: Unit-getestet werden nur die Auth-Helfer (`sha256Hex`
       .map((b) => b.toString(16).padStart(2, "0"))
       .join("");
   }
+
+  /**
+   * Liefert den erwarteten Wert des Auth-Cookies für das konfigurierte
+   * DASHBOARD_PASSWORD, oder `null`, wenn kein brauchbares Passwort
+   * konfiguriert ist (Variable fehlt oder ist auch nach `trim()` leer).
+   *
+   * Wichtig: Ein leeres Passwort darf NIEMALS als gültige Konfiguration
+   * durchgehen. Ohne diese Prüfung würde `sha256("")` als erwarteter
+   * Cookie-Wert berechnet — ein öffentlich bekannter, konstanter Hash
+   * (`e3b0c442...`), den jeder ohne Passwortkenntnis in sein Cookie
+   * schreiben könnte. Deshalb geben wir hier bewusst `null` zurück statt
+   * eines Hashs, und alle Aufrufer müssen `null` als "Zugriff verweigert"
+   * behandeln, bevor überhaupt verglichen wird (fail-closed).
+   */
+  export async function getExpectedAuthCookie(
+    rawPassword: string | undefined,
+  ): Promise<string | null> {
+    if (!rawPassword || rawPassword.trim() === "") {
+      return null;
+    }
+    return sha256Hex(rawPassword);
+  }
   ```
 
 - [ ] **Step 4: Tests ausführen, Erfolg verifizieren**
 
   Run: `npx vitest run tests/lib/auth.test.ts`
-  Expected: PASS, 3 Tests grün.
+  Expected: PASS, 8 Tests grün.
 
 - [ ] **Step 5: Commit**
 
@@ -6541,41 +7131,151 @@ Hinweis zur Teststrategie: Unit-getestet werden nur die Auth-Helfer (`sha256Hex`
 
 - [ ] **Step 6: Middleware implementieren**
 
-  Datei `src/middleware.ts` anlegen (das Projekt nutzt das `src`-Verzeichnis, Next.js erwartet die Middleware genau dort — NICHT im Projekt-Root und NICHT unter `src/app/`). Sie schützt alle Routen außer `/login`, `/_next` und `/favicon.ico`: Das Cookie `hv_auth` muss dem SHA-256-Hex des Dashboard-Passworts entsprechen, sonst Redirect auf `/login`:
+  Datei `src/middleware.ts` anlegen (das Projekt nutzt das `src`-Verzeichnis, Next.js erwartet die Middleware genau dort — NICHT im Projekt-Root und NICHT unter `src/app/`). Sie schützt alle Routen außer `/login`, `/_next` und `/favicon.ico`: Das Cookie `hv_auth` muss dem erwarteten Wert aus `getExpectedAuthCookie()` entsprechen, sonst Redirect auf `/login`. Fail-closed: Liefert `getExpectedAuthCookie` `null` (kein brauchbares Passwort konfiguriert), kann KEIN Cookie-Wert jemals passen — der Vergleich `expected !== null && cookieValue === expected` schließt den Zugriff dann unabhängig vom mitgeschickten Cookie aus:
 
   ```ts
   import { NextResponse, type NextRequest } from "next/server";
-  import { AUTH_COOKIE, sha256Hex } from "@/lib/auth";
+  import { AUTH_COOKIE, getExpectedAuthCookie } from "@/lib/auth";
 
   export async function middleware(request: NextRequest): Promise<NextResponse> {
-    const expected = await sha256Hex(process.env.DASHBOARD_PASSWORD ?? "");
+    // fail-closed: Ist kein brauchbares Passwort konfiguriert, liefert
+    // getExpectedAuthCookie `null` statt sha256(""). Damit kann kein Cookie-Wert
+    // jemals passen, egal was der Client mitschickt.
+    const expected = await getExpectedAuthCookie(process.env.DASHBOARD_PASSWORD);
     const cookieValue = request.cookies.get(AUTH_COOKIE)?.value;
-    if (cookieValue === expected) {
+    if (expected !== null && cookieValue === expected) {
       return NextResponse.next();
     }
     return NextResponse.redirect(new URL("/login", request.url));
   }
 
   export const config = {
-    matcher: ["/((?!login|_next|favicon.ico).*)"],
+    // Exakter Pfadabgleich statt Präfix-Lookahead: "login" und "favicon.ico"
+    // schließen nur den jeweils exakten Pfad aus, "_next/" nur echte
+    // Framework-Assets. Ein einfaches `login|_next|favicon.ico` im negativen
+    // Lookahead würde dagegen jeden mit "login" BEGINNENDEN Pfad ausschließen
+    // (z.B. "/loginXYZ", "/login-admin") — solche Pfade würden dann NIE von
+    // der Middleware geprüft und wären ungeschützt erreichbar.
+    matcher: ["/((?!login$|_next(?:/|$)|favicon\\.ico$).*)"],
   };
   ```
 
+- [ ] **Step 6b: Dedizierten Middleware-Test für den fail-closed-Fall schreiben**
+
+  Die Auth-Helfer-Tests in `tests/lib/auth.test.ts` prüfen nur `getExpectedAuthCookie` isoliert. Dieser zusätzliche Test reproduziert den konkreten Angriffsfall auf Ebene der Middleware selbst — inklusive des historischen Befunds, dass der öffentlich bekannte Hash `sha256("")` bei leerem `DASHBOARD_PASSWORD` als gültiges Cookie akzeptiert wurde.
+
+  Datei `tests/middleware.test.ts` anlegen:
+
+  ```ts
+  import { NextRequest } from "next/server";
+  import { afterEach, describe, expect, it } from "vitest";
+  import { AUTH_COOKIE, sha256Hex } from "@/lib/auth";
+  import { middleware } from "@/middleware";
+
+  const ORIGINAL_DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD;
+
+  function restoreEnv(): void {
+    if (ORIGINAL_DASHBOARD_PASSWORD === undefined) {
+      delete process.env.DASHBOARD_PASSWORD;
+    } else {
+      process.env.DASHBOARD_PASSWORD = ORIGINAL_DASHBOARD_PASSWORD;
+    }
+  }
+
+  function requestWithCookie(cookieValue: string | undefined): NextRequest {
+    const headers = new Headers();
+    if (cookieValue !== undefined) {
+      headers.set("cookie", `${AUTH_COOKIE}=${cookieValue}`);
+    }
+    return new NextRequest("http://localhost/", { headers });
+  }
+
+  describe("middleware (Zugriffsschutz, fail-closed)", () => {
+    afterEach(restoreEnv);
+
+    it(
+      "verweigert Zugriff, wenn DASHBOARD_PASSWORD leer ist, selbst mit dem " +
+        "Cookie-Wert sha256('') — der Reviewer-Reproduktionsfall (Critical)",
+      async () => {
+        process.env.DASHBOARD_PASSWORD = "";
+        const publiclyKnownEmptyHash = await sha256Hex("");
+        // Bekannter konstanter Wert, den jeder ohne Passwortkenntnis kennt:
+        expect(publiclyKnownEmptyHash).toBe(
+          "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        );
+
+        const request = requestWithCookie(publiclyKnownEmptyHash);
+        const response = await middleware(request);
+
+        expect(response.status).not.toBe(200);
+        expect(response.headers.get("location")).toContain("/login");
+      },
+    );
+
+    it("verweigert Zugriff, wenn DASHBOARD_PASSWORD nicht gesetzt ist (undefined)", async () => {
+      delete process.env.DASHBOARD_PASSWORD;
+      const publiclyKnownEmptyHash = await sha256Hex("");
+
+      const request = requestWithCookie(publiclyKnownEmptyHash);
+      const response = await middleware(request);
+
+      expect(response.status).not.toBe(200);
+      expect(response.headers.get("location")).toContain("/login");
+    });
+
+    it("verweigert Zugriff ganz ohne Cookie, wenn DASHBOARD_PASSWORD leer ist", async () => {
+      process.env.DASHBOARD_PASSWORD = "";
+      const request = requestWithCookie(undefined);
+      const response = await middleware(request);
+
+      expect(response.status).not.toBe(200);
+      expect(response.headers.get("location")).toContain("/login");
+    });
+
+    it("lässt den Zugriff mit korrektem Cookie zu, wenn ein Passwort konfiguriert ist", async () => {
+      process.env.DASHBOARD_PASSWORD = "korrektes-passwort";
+      const hash = await sha256Hex("korrektes-passwort");
+      const request = requestWithCookie(hash);
+      const response = await middleware(request);
+
+      // NextResponse.next() liefert Status 200 und leitet nicht um.
+      expect(response.status).toBe(200);
+    });
+
+    it("verweigert Zugriff mit falschem Cookie, wenn ein Passwort konfiguriert ist", async () => {
+      process.env.DASHBOARD_PASSWORD = "korrektes-passwort";
+      const request = requestWithCookie(await sha256Hex("falsches-passwort"));
+      const response = await middleware(request);
+
+      expect(response.status).not.toBe(200);
+      expect(response.headers.get("location")).toContain("/login");
+    });
+  });
+  ```
+
+  Run: `npx vitest run tests/middleware.test.ts`
+  Expected: PASS — 5 Tests grün.
+
 - [ ] **Step 7: Auth-Actions implementieren**
 
-  Datei `src/app/actions/auth.ts` anlegen. ACHTUNG: `cookies()` ist in Next 15 **async** — immer `await cookies()`. Passwortvergleich gegen `process.env.DASHBOARD_PASSWORD` (dieselbe Quelle wie die Middleware; bewusst kein `getEnv()`, damit Auth nicht an den vollständigen Mail-/API-Env-Satz gekoppelt ist). Bei leerem konfigurierten Passwort schlägt der Login immer fehl:
+  Datei `src/app/actions/auth.ts` anlegen. ACHTUNG: `cookies()` ist in Next 15 **async** — immer `await cookies()`. Passwortvergleich über `getExpectedAuthCookie(process.env.DASHBOARD_PASSWORD)` (dieselbe Quelle wie die Middleware; bewusst kein `getEnv()`, damit Auth nicht an den vollständigen Mail-/API-Env-Satz gekoppelt ist). Fail-closed: Liefert `getExpectedAuthCookie` `null`, schlagen `requireAuth()` und `login()` IMMER fehl — auch bei leerem Eingabefeld, das sonst zufällig zum leeren Erwartungswert passen würde:
 
   ```ts
   "use server";
 
   import { cookies } from "next/headers";
   import { redirect } from "next/navigation";
-  import { AUTH_COOKIE, sha256Hex } from "@/lib/auth";
+  import { AUTH_COOKIE, getExpectedAuthCookie, sha256Hex } from "@/lib/auth";
 
   export async function requireAuth(): Promise<void> {
+    // fail-closed: `null` bedeutet "kein Passwort konfiguriert" und muss immer
+    // zur Umleitung führen, bevor überhaupt ein Cookie-Wert verglichen wird.
+    const expected = await getExpectedAuthCookie(process.env.DASHBOARD_PASSWORD);
+    if (expected === null) {
+      redirect("/login?fehler=konfiguration");
+    }
     const cookieStore = await cookies();
     const value = cookieStore.get(AUTH_COOKIE)?.value;
-    const expected = await sha256Hex(process.env.DASHBOARD_PASSWORD ?? "");
     if (value !== expected) {
       redirect("/login");
     }
@@ -6583,12 +7283,19 @@ Hinweis zur Teststrategie: Unit-getestet werden nur die Auth-Helfer (`sha256Hex`
 
   export async function login(formData: FormData): Promise<void> {
     const password = String(formData.get("password") ?? "");
-    const expectedPassword = process.env.DASHBOARD_PASSWORD ?? "";
-    if (expectedPassword === "" || password !== expectedPassword) {
+    // fail-closed: Ohne konfiguriertes Passwort ist kein Login möglich —
+    // auch nicht mit leerem Feld, das sonst zufällig zum leeren Erwartungswert
+    // passen würde.
+    const expected = await getExpectedAuthCookie(process.env.DASHBOARD_PASSWORD);
+    if (expected === null) {
+      redirect("/login?fehler=konfiguration");
+    }
+    const candidate = await sha256Hex(password);
+    if (candidate !== expected) {
       redirect("/login?fehler=1");
     }
     const cookieStore = await cookies();
-    cookieStore.set(AUTH_COOKIE, await sha256Hex(password), {
+    cookieStore.set(AUTH_COOKIE, expected, {
       httpOnly: true,
       sameSite: "lax",
       maxAge: 60 * 60 * 24 * 30,
@@ -6659,8 +7366,8 @@ Hinweis zur Teststrategie: Unit-getestet werden nur die Auth-Helfer (`sha256Hex`
 - [ ] **Step 10: Commit**
 
   ```bash
-  git add src/middleware.ts src/app/actions/auth.ts src/app/login/page.tsx
-  git commit -m "feat: login-seite, auth-actions und middleware-schutz" -m "Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+  git add src/middleware.ts tests/middleware.test.ts src/app/actions/auth.ts src/app/login/page.tsx
+  git commit -m "feat: login-seite, auth-actions und middleware-schutz (fail-closed)" -m "Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   ```
 
 - [ ] **Step 11: StatusBadge-Komponente implementieren**
@@ -7287,6 +7994,42 @@ Kontext: Das Dashboard braucht Pflegeseiten für die drei Stammdaten-Tabellen `p
       ).rejects.toThrow("gültige E-Mail");
       expect(db.select().from(tenants).all()).toHaveLength(0);
     });
+
+    // Review-Befund: Ohne writeOrThrow() erschien der rohe SQLite-Fehler
+    // "UNIQUE constraint failed" auf der Next.js-Fehlerseite, statt einer
+    // verständlichen deutschen Meldung.
+    it("wirft bei bereits vergebener E-Mail eine deutsche Fehlermeldung statt eines rohen SQLite-Fehlers", async () => {
+      const propertyId = seedProperty();
+      db.insert(tenants)
+        .values({ name: "Erika Mustermann", email: "erika@example.com", propertyId })
+        .run();
+
+      await expect(
+        createTenant(
+          fd({
+            name: "Zweiter Max",
+            email: "Erika@Example.com",
+            propertyId: String(propertyId),
+          }),
+        ),
+      ).rejects.toThrow("bereits einem anderen Mieter zugeordnet");
+      expect(db.select().from(tenants).all()).toHaveLength(1);
+    });
+
+    it("wirft bei nicht existierender propertyId eine deutsche Fehlermeldung statt eines rohen SQLite-Fehlers", async () => {
+      const missingPropertyId = 999999;
+
+      await expect(
+        createTenant(
+          fd({
+            name: "Max Mustermann",
+            email: "max@example.com",
+            propertyId: String(missingPropertyId),
+          }),
+        ),
+      ).rejects.toThrow("Objekt existiert nicht mehr");
+      expect(db.select().from(tenants).all()).toHaveLength(0);
+    });
   });
 
   describe("updateTenant", () => {
@@ -7311,6 +8054,28 @@ Kontext: Das Dashboard braucht Pflegeseiten für die drei Stammdaten-Tabellen `p
       const row = db.select().from(tenants).where(eq(tenants.id, id)).get();
       expect(row?.name).toBe("Maximilian Mustermann");
       expect(row?.email).toBe("neu@example.com");
+    });
+
+    it("wirft beim Ändern auf eine bereits vergebene E-Mail dieselbe deutsche Fehlermeldung", async () => {
+      const propertyId = seedProperty();
+      db.insert(tenants)
+        .values({ name: "Erika Mustermann", email: "erika@example.com", propertyId })
+        .run();
+      const id = Number(
+        db
+          .insert(tenants)
+          .values({ name: "Max", email: "max@example.com", propertyId })
+          .run().lastInsertRowid,
+      );
+
+      await expect(
+        updateTenant(
+          id,
+          fd({ name: "Max", email: "Erika@Example.com", propertyId: String(propertyId) }),
+        ),
+      ).rejects.toThrow("bereits einem anderen Mieter zugeordnet");
+      const row = db.select().from(tenants).where(eq(tenants.id, id)).get();
+      expect(row?.email).toBe("max@example.com");
     });
   });
 
@@ -7443,6 +8208,57 @@ Kontext: Das Dashboard braucht Pflegeseiten für die drei Stammdaten-Tabellen `p
 
       expect(db.select().from(contractors).all()).toHaveLength(0);
     });
+
+    it("createContractor wirft bei bereits vergebener E-Mail eine deutsche Fehlermeldung statt eines rohen SQLite-Fehlers", async () => {
+      db.insert(contractors)
+        .values({ name: "Klaus Rohr", email: "klaus.rohr@example.com", trade: "Sanitär" })
+        .run();
+
+      await expect(
+        createContractor(
+          fd({ name: "Anderer Klaus", email: "Klaus.Rohr@Example.com", trade: "Elektrik" }),
+        ),
+      ).rejects.toThrow("bereits einem anderen Handwerker zugeordnet");
+      expect(db.select().from(contractors).all()).toHaveLength(1);
+    });
+
+    it("deleteContractor wirft bei FK-Konflikt (Handwerker hat Ticket) eine deutsche Fehlermeldung", async () => {
+      const propertyId = seedProperty();
+      const tenantId = Number(
+        db
+          .insert(tenants)
+          .values({ name: "Max", email: "max@example.com", propertyId })
+          .run().lastInsertRowid,
+      );
+      const contractorId = Number(
+        db
+          .insert(contractors)
+          .values({ name: "Klaus Rohr", email: "klaus.rohr@example.com", trade: "Sanitär" })
+          .run().lastInsertRowid,
+      );
+      const conversationId = Number(
+        db
+          .insert(conversations)
+          .values({
+            counterpartType: "tenant",
+            counterpartId: tenantId,
+            counterpartEmail: "max@example.com",
+          })
+          .run().lastInsertRowid,
+      );
+      db.insert(tickets)
+        .values({
+          tenantId,
+          conversationId,
+          contractorId,
+          type: "reparatur",
+          title: "Heizung defekt",
+        })
+        .run();
+
+      await expect(deleteContractor(contractorId)).rejects.toThrow("kann nicht gelöscht werden");
+      expect(db.select().from(contractors).all()).toHaveLength(1);
+    });
   });
   ```
 
@@ -7453,7 +8269,7 @@ Kontext: Das Dashboard braucht Pflegeseiten für die drei Stammdaten-Tabellen `p
 
 - [ ] **Step 4: Implementierung der Server Actions**
 
-  Erstelle `src/app/actions/masterdata.ts`. Alle neun Actions beginnen mit `await requireAuth()`, validieren per zod mit deutschen Fehlermeldungen (`throw new Error(...)` bei Fehlschlag), speichern E-Mails lowercase und rufen danach `revalidatePath`. Delete fängt den `FOREIGN KEY constraint failed`-Fehler von better-sqlite3 ab und wirft eine deutsche Meldung (einfachste PoC-Variante: der Fehler erscheint als Next.js-Fehlerseite).
+  Erstelle `src/app/actions/masterdata.ts`. Alle neun Actions beginnen mit `await requireAuth()`, validieren per zod mit deutschen Fehlermeldungen (`throw new Error(...)` bei Fehlschlag), speichern E-Mails lowercase und rufen danach `revalidatePath`. Delete fängt den `FOREIGN KEY constraint failed`-Fehler von better-sqlite3 ab und wirft eine deutsche Meldung (einfachste PoC-Variante: der Fehler erscheint als Next.js-Fehlerseite). Create/Update bei Mieter und Handwerker fangen zusätzlich `UNIQUE constraint failed` ab (bereits vergebene E-Mail-Adresse) und bei Mietern zusätzlich `FOREIGN KEY constraint failed` beim Anlegen/Ändern selbst (referenziertes Objekt existiert nicht mehr) — beides übersetzt `writeOrThrow` in eine verständliche deutsche Meldung, analog zu `deleteOrThrow` beim Löschen. Ohne diese Übersetzung landete der rohe SQLite-Fehlertext auf der Next.js-Fehlerseite.
 
   ```ts
   "use server";
@@ -7516,6 +8332,30 @@ Kontext: Das Dashboard braucht Pflegeseiten für die drei Stammdaten-Tabellen `p
     }
   }
 
+  // Analog zu deleteOrThrow, aber für Anlegen/Ändern: Dort kann statt eines
+  // FOREIGN-KEY-Konflikts (referenziertes Objekt existiert nicht (mehr), z.B.
+  // propertyId eines gelöschten Objekts) auch ein UNIQUE-Konflikt auftreten
+  // (bereits vergebene E-Mail-Adresse bei tenants/contractors). Beides wird in
+  // eine verständliche deutsche Meldung übersetzt; alle anderen Fehler werden
+  // unverändert weitergeworfen, damit unbekannte Fehler nicht verschluckt werden.
+  function writeOrThrow(
+    run: () => void,
+    messages: { emailTaken: string; referenceMissing?: string },
+  ): void {
+    try {
+      run();
+    } catch (err) {
+      const text = String(err);
+      if (text.includes("UNIQUE constraint failed")) {
+        throw new Error(messages.emailTaken);
+      }
+      if (messages.referenceMissing && text.includes("FOREIGN KEY constraint failed")) {
+        throw new Error(messages.referenceMissing);
+      }
+      throw err;
+    }
+  }
+
   // --- Objekte ---
 
   export async function createProperty(formData: FormData): Promise<void> {
@@ -7564,15 +8404,26 @@ Kontext: Das Dashboard braucht Pflegeseiten für die drei Stammdaten-Tabellen `p
     };
   }
 
+  const TENANT_EMAIL_TAKEN =
+    "Diese E-Mail-Adresse ist bereits einem anderen Mieter zugeordnet. Bitte eine andere E-Mail-Adresse verwenden oder den bestehenden Mieter bearbeiten.";
+  const TENANT_PROPERTY_MISSING =
+    "Das ausgewählte Objekt existiert nicht mehr. Bitte die Seite neu laden und ein gültiges Objekt auswählen.";
+
   export async function createTenant(formData: FormData): Promise<void> {
     await requireAuth();
-    getDb().insert(tenants).values(tenantValues(formData)).run();
+    writeOrThrow(() => getDb().insert(tenants).values(tenantValues(formData)).run(), {
+      emailTaken: TENANT_EMAIL_TAKEN,
+      referenceMissing: TENANT_PROPERTY_MISSING,
+    });
     revalidatePath("/stammdaten/mieter");
   }
 
   export async function updateTenant(id: number, formData: FormData): Promise<void> {
     await requireAuth();
-    getDb().update(tenants).set(tenantValues(formData)).where(eq(tenants.id, id)).run();
+    writeOrThrow(
+      () => getDb().update(tenants).set(tenantValues(formData)).where(eq(tenants.id, id)).run(),
+      { emailTaken: TENANT_EMAIL_TAKEN, referenceMissing: TENANT_PROPERTY_MISSING },
+    );
     revalidatePath("/stammdaten/mieter");
   }
 
@@ -7602,19 +8453,28 @@ Kontext: Das Dashboard braucht Pflegeseiten für die drei Stammdaten-Tabellen `p
     };
   }
 
+  const CONTRACTOR_EMAIL_TAKEN =
+    "Diese E-Mail-Adresse ist bereits einem anderen Handwerker zugeordnet. Bitte eine andere E-Mail-Adresse verwenden oder den bestehenden Handwerker bearbeiten.";
+
   export async function createContractor(formData: FormData): Promise<void> {
     await requireAuth();
-    getDb().insert(contractors).values(contractorValues(formData)).run();
+    writeOrThrow(() => getDb().insert(contractors).values(contractorValues(formData)).run(), {
+      emailTaken: CONTRACTOR_EMAIL_TAKEN,
+    });
     revalidatePath("/stammdaten/handwerker");
   }
 
   export async function updateContractor(id: number, formData: FormData): Promise<void> {
     await requireAuth();
-    getDb()
-      .update(contractors)
-      .set(contractorValues(formData))
-      .where(eq(contractors.id, id))
-      .run();
+    writeOrThrow(
+      () =>
+        getDb()
+          .update(contractors)
+          .set(contractorValues(formData))
+          .where(eq(contractors.id, id))
+          .run(),
+      { emailTaken: CONTRACTOR_EMAIL_TAKEN },
+    );
     revalidatePath("/stammdaten/handwerker");
   }
 
@@ -7631,7 +8491,7 @@ Kontext: Das Dashboard braucht Pflegeseiten für die drei Stammdaten-Tabellen `p
 - [ ] **Step 5: Tests ausführen, Erfolg verifizieren**
 
   Run: `npx vitest run tests/app/actions/masterdata.test.ts`
-  Expected: PASS (13 Tests grün).
+  Expected: PASS (18 Tests grün).
 
 - [ ] **Step 6: Commit**
 
@@ -8070,6 +8930,8 @@ Kontext: Das Dashboard braucht Pflegeseiten für die drei Stammdaten-Tabellen `p
 
 Kontext: Die Wissensquelle der KI (Task 7: `src/lib/documents.ts` mit Textextraktion und FTS5-Index) braucht eine Dashboard-Oberfläche: Upload (PDF/TXT/MD), Liste mit Größe und Datum, Löschen. Dieser Task legt die Server Actions und die Seite `/dokumente` an. Die Tests folgen dem in Task 12 etablierten Action-Test-Muster (drei explizite `vi.mock`-Aufrufe + Factories aus `tests/helpers/nextMocks.ts`).
 
+**Härtungslücke aus dem Review, bewusst geschlossen:** `uploadDocument` akzeptiert NUR PDF-, Text- und Markdown-Dateien (`.pdf`, `.txt`, `.md`, `.markdown`). Ohne diese Prüfung landet der Rohinhalt beliebiger Binärdateien (Bilder, ZIPs, ...) per `data.toString("utf8")` als Binärmüll im FTS5-Volltextindex — der KI-Agent durchsucht genau diesen Index als Faktenquelle über `search_documents` (Task 8). Im Review nachgewiesen anhand einer hochgeladenen PNG, die per Suche nach "JFIF" auffindbar wurde: Ohne Filter hätte die KI potenziell binären Datenmüll als "Fakt" zitiert.
+
 **Files:**
 - Create: `src/app/actions/documents.ts`
 - Create: `src/app/dokumente/page.tsx`
@@ -8170,6 +9032,44 @@ Kontext: Die Wissensquelle der KI (Task 7: `src/lib/documents.ts` mit Textextrak
       );
       expect(db.select().from(documents).all()).toHaveLength(0);
     });
+
+    it("akzeptiert eine Markdown-Datei (.md)", async () => {
+      const text = "# Hausordnung\n\nRuhezeiten gelten werktags ab 22 Uhr.";
+      const file = new File([Buffer.from(text, "utf8")], "hausordnung.md", {
+        type: "text/markdown",
+      });
+      const formData = new FormData();
+      formData.set("file", file);
+
+      await uploadDocument(formData);
+
+      const row = db.select().from(documents).all()[0];
+      expect(row).toBeDefined();
+      expect(row.filename).toBe("hausordnung.md");
+      expect(row.mimeType).toBe("text/markdown");
+      expect(row.content).toContain("Ruhezeiten");
+    });
+
+    // Härtungslücke aus dem Review: Ein versehentlich hochgeladenes Bild landete
+    // vor diesem Fix per data.toString("utf8") als Binärmüll im FTS5-Index, den
+    // der KI-Agent als Faktenquelle durchsucht (Nachweis: Suche nach "JFIF" fand
+    // einen Treffer). uploadDocument muss solche Dateitypen ablehnen, BEVOR sie
+    // addDocument()/dem Index erreichen.
+    it("lehnt einen nicht unterstützten Dateityp (PNG) ab und indiziert nichts", async () => {
+      const pngBytes = Buffer.from([
+        0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01,
+      ]); // JFIF-Signatur
+      const file = new File([pngBytes], "urlaubsfoto.png", { type: "image/png" });
+      const formData = new FormData();
+      formData.set("file", file);
+
+      await expect(uploadDocument(formData)).rejects.toThrow(
+        /PDF.*TXT.*Markdown|Nicht unterstützter Dateityp/,
+      );
+
+      expect(db.select().from(documents).all()).toHaveLength(0);
+      expect(searchDocuments("JFIF")).toEqual([]);
+    });
   });
 
   describe("removeDocument", () => {
@@ -8198,7 +9098,9 @@ Kontext: Die Wissensquelle der KI (Task 7: `src/lib/documents.ts` mit Textextrak
 
 - [ ] **Step 3: Implementierung der Server Actions**
 
-  Erstelle `src/app/actions/documents.ts`. `uploadDocument` liest das Feld `file` aus der FormData, konvertiert per `Buffer.from(await file.arrayBuffer())` und delegiert an `addDocument` (dort passiert PDF-/Text-Extraktion und FTS5-Indizierung). Leerer oder fehlender Upload wirft eine deutsche Fehlermeldung.
+  Erstelle `src/app/actions/documents.ts`. `uploadDocument` liest das Feld `file` aus der FormData, prüft den Dateityp gegen eine Allowlist, konvertiert per `Buffer.from(await file.arrayBuffer())` und delegiert an `addDocument` (dort passiert PDF-/Text-Extraktion und FTS5-Indizierung). Leerer, fehlender oder nicht unterstützter Upload wirft eine deutsche Fehlermeldung.
+
+  Die Prüfung läuft über BEIDES, Dateiendung UND MIME-Typ, weil keins der beiden Signale allein zuverlässig ist: Der MIME-Typ kommt unverändert vom Browser (`file.type`) und ist für Markdown-Dateien je nach Betriebssystem/Browser oft leer oder generisch `application/octet-stream` — ein Verlass allein auf den MIME-Typ würde also viele legitime `.md`-Uploads ablehnen. Die Endung allein erkennt umgekehrt keine Fehlbenennung: Browser ermitteln `file.type` in der Regel über den tatsächlichen Dateiinhalt bzw. die Systemregistrierung, nicht nur über die Endung im Dateinamen — eine als `hausordnung.txt` umbenannte PNG wird von den meisten Browsern trotzdem mit `type: "image/png"` gemeldet. Deshalb: Die Endung MUSS zur Allowlist passen; ist zusätzlich ein spezifischer (nicht leerer/generischer) MIME-Typ gesetzt, muss auch dieser zur Allowlist passen.
 
   ```ts
   "use server";
@@ -8207,11 +9109,33 @@ Kontext: Die Wissensquelle der KI (Task 7: `src/lib/documents.ts` mit Textextrak
   import { addDocument, deleteDocument } from "@/lib/documents";
   import { requireAuth } from "@/app/actions/auth";
 
+  const ALLOWED_EXTENSIONS = [".pdf", ".txt", ".md", ".markdown"];
+  const ALLOWED_MIME_TYPES = new Set([
+    "application/pdf",
+    "text/plain",
+    "text/markdown",
+    "text/x-markdown",
+  ]);
+  const GENERIC_MIME_TYPES = new Set(["", "application/octet-stream"]);
+
+  function isAllowedDocumentType(filename: string, mimeType: string): boolean {
+    const dotIndex = filename.lastIndexOf(".");
+    const extension = dotIndex === -1 ? "" : filename.slice(dotIndex).toLowerCase();
+    if (!ALLOWED_EXTENSIONS.includes(extension)) return false;
+    if (GENERIC_MIME_TYPES.has(mimeType)) return true;
+    return ALLOWED_MIME_TYPES.has(mimeType);
+  }
+
   export async function uploadDocument(formData: FormData): Promise<void> {
     await requireAuth();
     const file = formData.get("file");
     if (!(file instanceof File) || file.size === 0) {
       throw new Error("Bitte eine Datei auswählen.");
+    }
+    if (!isAllowedDocumentType(file.name, file.type)) {
+      throw new Error(
+        "Nicht unterstützter Dateityp. Erlaubt sind nur PDF, TXT und Markdown (.pdf, .txt, .md, .markdown).",
+      );
     }
     const data = Buffer.from(await file.arrayBuffer());
     await addDocument(file.name, file.type || "application/octet-stream", data);
@@ -8228,7 +9152,7 @@ Kontext: Die Wissensquelle der KI (Task 7: `src/lib/documents.ts` mit Textextrak
 - [ ] **Step 4: Tests ausführen, Erfolg verifizieren**
 
   Run: `npx vitest run tests/app/actions/documents.test.ts`
-  Expected: PASS (3 Tests grün).
+  Expected: PASS (5 Tests grün).
 
 - [ ] **Step 5: Commit**
 
@@ -8372,6 +9296,7 @@ Dieser Task baut die Vorgangsliste (`/vorgaenge`), die Vorgangsdetailseite (`/vo
   import { sha256Hex } from "@/lib/auth";
   import { sendSmtp } from "@/channel/smtp";
   import { sendManualReply, setTicketStatus } from "@/app/actions/tickets";
+  import type { TicketStatus } from "@/lib/tickets";
 
   vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
   vi.mock("next/navigation", () => ({
@@ -8466,6 +9391,22 @@ Dieser Task baut die Vorgangsliste (`/vorgaenge`), die Vorgangsdetailseite (`/vo
       const updated = db.select().from(tickets).where(eq(tickets.id, ticket.id)).get();
       expect(updated?.status).toBe("erledigt");
     });
+
+    // Review-Befund: setTicketStatus ist als Export einer "use server"-Datei ein
+    // eigenständiger, per POST direkt ansprechbarer Endpunkt — der TypeScript-Typ
+    // TicketStatus schützt zur Laufzeit nicht vor einem beliebigen String. Da
+    // force:true unten den canTransition-Check überspringt, muss der Wert vorher
+    // explizit gegen TICKET_STATUSES geprüft werden.
+    it("wirft bei unbekanntem Statuswert eine deutsche Fehlermeldung und lässt das Ticket unverändert", async () => {
+      const { ticket } = seed("neu");
+
+      await expect(
+        setTicketStatus(ticket.id, "voellig_unbekannter_status" as TicketStatus),
+      ).rejects.toThrow(/[Uu]nbekannt.*voellig_unbekannter_status/);
+
+      const unchanged = db.select().from(tickets).where(eq(tickets.id, ticket.id)).get();
+      expect(unchanged?.status).toBe("neu");
+    });
   });
 
   describe("sendManualReply", () => {
@@ -8523,13 +9464,21 @@ Dieser Task baut die Vorgangsliste (`/vorgaenge`), die Vorgangsdetailseite (`/vo
   import { eq } from "drizzle-orm";
   import { getDb } from "@/db/client";
   import { tenants, tickets } from "@/db/schema";
-  import { transitionTicket, type TicketStatus } from "@/lib/tickets";
+  import { TICKET_STATUSES, transitionTicket, type TicketStatus } from "@/lib/tickets";
   import { buildTicketTag } from "@/lib/subject";
   import { sendAndLogEmail } from "@/lib/outbound";
   import { requireAuth } from "./auth";
 
   export async function setTicketStatus(ticketId: number, status: TicketStatus): Promise<void> {
     await requireAuth();
+    // Der TypeScript-Typ TicketStatus schützt hier nicht: Als Export einer
+    // "use server"-Datei ist diese Funktion ein eigenständiger, per POST direkt
+    // ansprechbarer Endpunkt, der auch mit einem beliebigen String aufgerufen
+    // werden kann. `force: true` unten überspringt den canTransition-Check,
+    // daher muss der Wert vorher gegen die bekannten Status geprüft werden.
+    if (!(TICKET_STATUSES as readonly string[]).includes(status)) {
+      throw new Error(`Unbekannter Status "${status}": Vorgang kann nicht aktualisiert werden.`);
+    }
     transitionTicket(ticketId, status, { force: true });
     revalidatePath("/vorgaenge");
     revalidatePath(`/vorgaenge/${ticketId}`);
@@ -8573,7 +9522,7 @@ Dieser Task baut die Vorgangsliste (`/vorgaenge`), die Vorgangsdetailseite (`/vo
 - [ ] **Step 4: Tests ausführen, Erfolg verifizieren**
 
   Run: `npx vitest run tests/app/actions/tickets.test.ts`
-  Expected: PASS (5 Tests grün).
+  Expected: PASS (6 Tests grün).
 
 - [ ] **Step 5: Commit**
 
@@ -9029,7 +9978,9 @@ Dieser Task baut die Vorgangsliste (`/vorgaenge`), die Vorgangsdetailseite (`/vo
 
 ### Task 15: Genehmigungen-UI
 
-Dieser Task baut die Genehmigungsseite (`/genehmigungen`) und die Server Actions `approveApproval` / `rejectApproval` / `updateApprovalDraft`. Kernstück ist die vertraglich fixierte Genehmigungs-Sequenz: Statuswechsel `wartet_auf_genehmigung → genehmigt`, Versand der Handwerker-Mail mit Ticket-Tag, dann `genehmigt → handwerker_angefragt`. Die Ablehnung erzeugt eine synthetische Landlord-Message, die der Worker später wie eine normale eingehende Nachricht verarbeitet (kind `landlord_answer`) und daraus die Absage an den Mieter formuliert.
+Dieser Task baut die Genehmigungsseite (`/genehmigungen`) und die Server Actions `approveApproval` / `rejectApproval` / `updateApprovalDraft`. Kernstück ist die vertraglich fixierte Genehmigungs-Sequenz: Anspruch auf den Antrag atomar sichern, Statuswechsel `wartet_auf_genehmigung → genehmigt`, Versand der Handwerker-Mail mit Ticket-Tag, dann `genehmigt → handwerker_angefragt`. Die Ablehnung erzeugt eine synthetische Landlord-Message, die der Worker später wie eine normale eingehende Nachricht verarbeitet (kind `landlord_answer`) und daraus die Absage an den Mieter formuliert.
+
+**Zwei Sicherheitslücken aus dem Review sind hier bewusst geschlossen und dürfen nicht zurückgebaut werden:** Erstens sicherte eine frühere Fassung den Anspruch auf einen Genehmigungsantrag erst NACH dem Mailversand ab (`approvals.status` auf `"genehmigt"` gesetzt erst am Ende von `approveApproval`) — zwei nahezu gleichzeitige Klicks auf "Genehmigen" sahen beide noch `status: "offen"` und schickten dem Handwerker **zwei** Aufträge. Der Fix beansprucht den Antrag atomar per bedingtem Update (`WHERE status = 'offen'`), BEVOR irgendein anderer Schritt passiert, und rollt bei einem Fehler danach (typischerweise SMTP) wieder auf `"offen"` zurück, damit ein erneuter Klick den Vorgang zu Ende bringen kann. Zweitens prüfte `rejectApproval` den Ticket-Status nicht vorab und schrieb die Mieter-Benachrichtigung erst nach dem Statuswechsel — wechselte das Ticket zwischenzeitlich in einen Status, aus dem heraus `"abgelehnt"` kein gültiges Ziel mehr ist, blieb der Antrag unwiderruflich abgelehnt markiert, OHNE dass der Mieter je informiert wurde. Der Fix prüft den Ticket-Status zuerst und schreibt die Mieter-Benachrichtigung VOR jedem anderen Schreibzugriff.
 
 **Files:**
 - Create: `src/app/actions/approvals.ts`
@@ -9058,7 +10009,7 @@ Dieser Task baut die Genehmigungsseite (`/genehmigungen`) und die Server Actions
   ```ts
   // tests/app/actions/approvals.test.ts
   import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-  import { eq } from "drizzle-orm";
+  import { and, eq } from "drizzle-orm";
   import { makeTestDb } from "../../helpers/db";
   import { setDbForTesting, type AppDb } from "@/db/client";
   import {
@@ -9073,6 +10024,7 @@ Dieser Task baut die Genehmigungsseite (`/genehmigungen`) und die Server Actions
   import { setAuthCookieValue } from "../../helpers/nextMocks";
   import { sha256Hex } from "@/lib/auth";
   import { sendSmtp } from "@/channel/smtp";
+  import { transitionTicket } from "@/lib/tickets";
   import {
     approveApproval,
     rejectApproval,
@@ -9261,6 +10213,70 @@ Dieser Task baut die Genehmigungsseite (`/genehmigungen`) und die Server Actions
         .get();
       expect(decided?.status).toBe("genehmigt");
     });
+
+    it("stellt den Zustand her, den das Agent-Werkzeug send_reply für Handwerker-Mails voraussetzt", async () => {
+      // send_reply (src/agent/tools.ts) lässt E-Mails an den Handwerker nur zu,
+      // wenn GENAU diese Kombination existiert: eine approvals-Zeile mit
+      // status="genehmigt" für GENAU dieses Ticket und GENAU diesen Handwerker,
+      // sowie tickets.contractorId gesetzt. Dieser Test bildet exakt die Gate-
+      // Abfrage aus tools.ts nach, damit eine künftige Änderung an approveApproval
+      // diesen Vertrag nicht versehentlich bricht.
+      const { ticket, contractor, approval } = seed();
+
+      await approveApproval(approval.id);
+
+      const gateRow = db
+        .select()
+        .from(approvals)
+        .where(
+          and(
+            eq(approvals.ticketId, ticket.id),
+            eq(approvals.status, "genehmigt"),
+            eq(approvals.contractorId, contractor.id),
+          ),
+        )
+        .get();
+      expect(gateRow).toBeDefined();
+      expect(gateRow?.id).toBe(approval.id);
+
+      const updatedTicket = db.select().from(tickets).where(eq(tickets.id, ticket.id)).get();
+      expect(updatedTicket?.contractorId).toBe(contractor.id);
+    });
+
+    it("schickt bei zwei überlappenden Genehmigungen genau eine Mail an den Handwerker (Race Condition)", async () => {
+      // Realistische SMTP-Latenz simulieren: Ein sofort auflösender Mock würde
+      // den Test zufällig serialisieren (requireAuth() braucht selbst ein paar
+      // Mikro-Ticks) und die Race Condition dadurch verdecken, statt sie zu
+      // beweisen. Mit spürbarer Verzögerung sind beide Aufrufe garantiert
+      // gleichzeitig "in Flight", bevor irgendeine Antwort zurückkommt.
+      const { ticket, approval } = seed();
+      vi.mocked(sendSmtp).mockImplementation(
+        () => new Promise((resolve) => setTimeout(resolve, 30)),
+      );
+
+      const results = await Promise.allSettled([
+        approveApproval(approval.id),
+        approveApproval(approval.id),
+      ]);
+
+      expect(sendSmtp).toHaveBeenCalledTimes(1);
+
+      const fulfilled = results.filter((r) => r.status === "fulfilled");
+      const rejected = results.filter((r) => r.status === "rejected") as PromiseRejectedResult[];
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+      expect(String(rejected[0].reason?.message)).toMatch(/bereits/);
+
+      const finalTicket = db.select().from(tickets).where(eq(tickets.id, ticket.id)).get();
+      expect(finalTicket?.status).toBe("handwerker_angefragt");
+
+      const finalApproval = db
+        .select()
+        .from(approvals)
+        .where(eq(approvals.id, approval.id))
+        .get();
+      expect(finalApproval?.status).toBe("genehmigt");
+    });
   });
 
   describe("rejectApproval", () => {
@@ -9315,6 +10331,39 @@ Dieser Task baut die Genehmigungsseite (`/genehmigungen`) und die Server Actions
 
       await expect(rejectApproval(approval.id, "Egal")).rejects.toThrow();
     });
+
+    it("bricht ab, wenn das Ticket zwischenzeitlich in einen Status gewechselt hat, aus dem heraus 'abgelehnt' kein gültiger Übergang ist, und lässt den Antrag bearbeitbar", async () => {
+      // Szenario: Zwischen Antragstellung und Vermieter-Klick hat die KI eine
+      // Rückfrage gestellt und das Ticket nach "eskaliert" transitioniert (ein
+      // regulärer Übergang aus "wartet_auf_genehmigung"). Aus "eskaliert" heraus
+      // ist "abgelehnt" laut TICKET_TRANSITIONS kein gültiges Ziel mehr.
+      const { conv, ticket, approval } = seed();
+      transitionTicket(ticket.id, "eskaliert");
+
+      await expect(
+        rejectApproval(approval.id, "Zu teuer, bitte erst einen Kostenvoranschlag einholen"),
+      ).rejects.toThrow();
+
+      // Der Antrag darf NICHT unwiderruflich auf "abgelehnt" stehen bleiben —
+      // sonst verschwindet er aus /genehmigungen, ein erneuter Versuch ist
+      // blockiert, und die synthetische Nachricht an den Mieter wird nie erzeugt.
+      const unchangedApproval = db
+        .select()
+        .from(approvals)
+        .where(eq(approvals.id, approval.id))
+        .get();
+      expect(unchangedApproval?.status).toBe("offen");
+
+      const unchangedTicket = db.select().from(tickets).where(eq(tickets.id, ticket.id)).get();
+      expect(unchangedTicket?.status).toBe("eskaliert");
+
+      const synthetic = db
+        .select()
+        .from(messages)
+        .where(eq(messages.conversationId, conv.id))
+        .all();
+      expect(synthetic).toHaveLength(0);
+    });
   });
 
   describe("updateApprovalDraft", () => {
@@ -9354,14 +10403,18 @@ Dieser Task baut die Genehmigungsseite (`/genehmigungen`) und die Server Actions
 
 - [ ] **Step 3: Implementierung der Server Actions**
 
-  Die Sequenz in `approveApproval` ist vertraglich fixiert und darf nicht umgestellt werden: (1) Prüfungen, (2) `transitionTicket(genehmigt)`, (3) `findOrCreateConversation` für den Handwerker, (4) `sendAndLogEmail` mit `ensureTag`, (5) Approval auf `genehmigt` + `decidedAt`, (6) `tickets.contractorId` setzen, (7) `transitionTicket(handwerker_angefragt)`.
+  Die Sequenz in `approveApproval` ist vertraglich fixiert und darf nicht umgestellt werden: (1) Prüfungen, (2) Anspruch auf den Antrag ATOMAR sichern (bedingtes Update `WHERE status = 'offen'`), (3) `transitionTicket(genehmigt)`, (4) `findOrCreateConversation` für den Handwerker, (5) `sendAndLogEmail` mit `ensureTag`, (6) `tickets.contractorId` setzen, (7) `transitionTicket(handwerker_angefragt)`. Schlägt irgendetwas nach Schritt 2 fehl, wird der Anspruch im `catch` zurück auf `"offen"` gesetzt, damit ein erneuter Klick den Vorgang zu Ende bringen kann.
+
+  **Warum der Anspruch VOR dem Mailversand gesichert wird, nicht danach:** Eine frühere Fassung setzte `approvals.status = "genehmigt"` erst als (damaligen) Schritt 5, NACH dem Mailversand. Zwischen den synchronen Lese-Prüfungen am Anfang und diesem späten Update lag der `await sendAndLogEmail(...)` — genug Zeit, damit ein zweiter, praktisch gleichzeitiger Aufruf (Doppelklick, zwei Browser-Tabs) denselben Antrag noch mit `status: "offen"` vorfand und ebenfalls eine Handwerker-Mail verschickte. Das bedingte Update `WHERE status = 'offen'` ist dagegen eine einzige synchrone SQLite-Operation: Der zweite Aufruf sieht `changes === 0` und bricht sofort mit einer sprechenden Fehlermeldung ab, BEVOR er selbst eine Mail verschickt.
+
+  **Warum `rejectApproval` den Ticket-Status vorab prüft und die Mieter-Nachricht zuerst schreibt:** Eine frühere Fassung prüfte den Ticket-Status gar nicht und aktualisierte `approvals` bereits, bevor die synthetische Landlord-Message angelegt wurde. Wechselte das Ticket zwischen Antragstellung und Vermieter-Entscheidung in einen Status, aus dem heraus `"abgelehnt"` kein gültiges Ziel mehr ist (z.B. `"eskaliert"`, weil die KI zwischenzeitlich eine Rückfrage gestellt hat), warf `transitionTicket` erst NACH dem `approvals`-Update — der Antrag blieb dann unwiderruflich auf `"abgelehnt"` stehen, ohne dass der Mieter je über die synthetische Nachricht informiert wurde. Die aktuelle Fassung prüft den Status zuerst und schreibt danach in der Reihenfolge Mieter-Nachricht → Ticket-Transition → Antrag als entschieden markieren, damit der eigentliche Zweck der Ablehnung (den Mieter informieren) nicht durch einen späteren Fehler übersprungen werden kann.
 
   ```ts
   // src/app/actions/approvals.ts
   "use server";
 
   import { revalidatePath } from "next/cache";
-  import { eq } from "drizzle-orm";
+  import { and, eq } from "drizzle-orm";
   import { getEnv } from "@/env";
   import { getDb } from "@/db/client";
   import { approvals, contractors, messages, tickets } from "@/db/schema";
@@ -9418,36 +10471,66 @@ Dieser Task baut die Genehmigungsseite (`/genehmigungen`) und die Server Actions
       throw new Error(`Handwerker ${approval.contractorId} nicht gefunden.`);
     }
 
-    if (ticket.status === "wartet_auf_genehmigung") {
-      transitionTicket(ticket.id, "genehmigt");
+    // Anspruch atomar sichern, BEVOR irgendetwas anderes passiert (Ticket-
+    // Transition, Mailversand). Bedingtes Update: Es greift nur, wenn der
+    // Antrag zu diesem Zeitpunkt noch "offen" ist. Zwischen den obigen
+    // synchronen Lesezugriffen und hier liegt kein `await` — der komplette
+    // Block läuft in einem Zug, ohne dass ein zweiter, überlappender Aufruf
+    // dazwischenfunken kann. Wer zuerst hier ankommt, gewinnt den Anspruch;
+    // der andere sieht unten `changes === 0`.
+    const claim = db
+      .update(approvals)
+      .set({ status: "genehmigt", decidedAt: new Date().toISOString() })
+      .where(and(eq(approvals.id, approval.id), eq(approvals.status, "offen")))
+      .run();
+    if (claim.changes === 0) {
+      throw new Error(
+        `Genehmigungsantrag ${approvalId} wurde soeben bereits in einem anderen Vorgang entschieden. Bitte die Seite neu laden.`,
+      );
     }
 
-    const convId = findOrCreateConversation({
-      email: contractor.email,
-      counterpartType: "contractor",
-      counterpartId: contractor.id,
-    });
+    try {
+      if (ticket.status === "wartet_auf_genehmigung") {
+        transitionTicket(ticket.id, "genehmigt");
+      }
 
-    await sendAndLogEmail({
-      to: contractor.email,
-      subject: ensureTag(approval.emailSubject, ticket.id),
-      text: approval.emailBody,
-      role: "landlord",
-      conversationId: convId,
-      ticketId: ticket.id,
-    });
+      const convId = findOrCreateConversation({
+        email: contractor.email,
+        counterpartType: "contractor",
+        counterpartId: contractor.id,
+      });
 
-    db.update(approvals)
-      .set({ status: "genehmigt", decidedAt: new Date().toISOString() })
-      .where(eq(approvals.id, approval.id))
-      .run();
+      await sendAndLogEmail({
+        to: contractor.email,
+        subject: ensureTag(approval.emailSubject, ticket.id),
+        text: approval.emailBody,
+        role: "landlord",
+        conversationId: convId,
+        ticketId: ticket.id,
+      });
 
-    db.update(tickets)
-      .set({ contractorId: contractor.id })
-      .where(eq(tickets.id, ticket.id))
-      .run();
+      db.update(tickets)
+        .set({ contractorId: contractor.id })
+        .where(eq(tickets.id, ticket.id))
+        .run();
 
-    transitionTicket(ticket.id, "handwerker_angefragt");
+      transitionTicket(ticket.id, "handwerker_angefragt");
+    } catch (err) {
+      // Wiederholbarkeit erhalten: Der Anspruch oben ist bereits gesichert,
+      // aber danach ist etwas schiefgegangen (typischerweise der SMTP-Versand).
+      // Antrag zurück auf "offen", damit ein erneuter Klick den Vorgang zu Ende
+      // bringen kann, statt dauerhaft in einem Zwischenzustand hängen zu
+      // bleiben ("genehmigt", aber ohne dass je eine Mail rausging).
+      // Bekannte Einschränkung (für den PoC hinnehmbar): Stürzt der Prozess
+      // exakt zwischen erfolgreichem Mailversand und diesem catch-Block ab,
+      // bleibt der Antrag auf "genehmigt" stehen, obwohl der weitere
+      // Statuswechsel (Ticket → handwerker_angefragt) nicht mehr passiert ist.
+      db.update(approvals)
+        .set({ status: "offen", decidedAt: null })
+        .where(eq(approvals.id, approval.id))
+        .run();
+      throw err;
+    }
 
     revalidateApprovalPages(ticket.id);
   }
@@ -9461,18 +10544,27 @@ Dieser Task baut die Genehmigungsseite (`/genehmigungen`) und die Server Actions
     if (!ticket) {
       throw new Error(`Ticket ${approval.ticketId} nicht gefunden.`);
     }
+    // Spiegelbild des Guards in approveApproval: Der Ticket-Status wird VOR
+    // jedem Schreibzugriff geprüft. "abgelehnt" ist laut TICKET_TRANSITIONS nur
+    // aus "wartet_auf_genehmigung" heraus ein gültiges Ziel. Ohne diese Prüfung
+    // würde transitionTicket weiter unten erst NACH dem approvals-Update
+    // werfen (z.B. wenn das Ticket zwischenzeitlich nach "eskaliert" gewechselt
+    // ist, weil die KI eine Rückfrage gestellt hat) — der Antrag bliebe dann
+    // unwiderruflich auf "abgelehnt" stehen, ohne dass der Mieter je über die
+    // synthetische Nachricht informiert wird.
+    if (ticket.status !== "wartet_auf_genehmigung") {
+      throw new Error(
+        `Ticket ${ticket.id} ist nicht mehr im Status "wartet_auf_genehmigung" (aktuell: "${ticket.status}") ` +
+          `und kann daher nicht abgelehnt werden. Der Antrag bleibt offen — bitte Ticket ${buildTicketTag(ticket.id)} ` +
+          `zunächst dort prüfen und die Ablehnung danach erneut versuchen.`,
+      );
+    }
 
-    db.update(approvals)
-      .set({
-        status: "abgelehnt",
-        decisionNote: note,
-        decidedAt: new Date().toISOString(),
-      })
-      .where(eq(approvals.id, approval.id))
-      .run();
-
-    transitionTicket(ticket.id, "abgelehnt");
-
+    // Reihenfolge bewusst gewählt: Die Benachrichtigung des Mieters ist der
+    // eigentliche Zweck der Ablehnung und darf nicht übersprungen werden, falls
+    // ein späterer Schritt scheitert — deshalb zuerst die synthetische
+    // Nachricht anlegen, danach erst die Ticket-Transition und zuletzt den
+    // Antrag als entschieden markieren.
     db.insert(messages)
       .values({
         conversationId: ticket.conversationId,
@@ -9485,6 +10577,17 @@ Dieser Task baut die Genehmigungsseite (`/genehmigungen`) und die Server Actions
         body: `Der Vermieter hat den Genehmigungsantrag zu Ticket ${buildTicketTag(ticket.id)} abgelehnt. Begründung: ${note}. Bitte informiere den Mieter freundlich und biete ggf. Alternativen an.`,
         processingStatus: "pending",
       })
+      .run();
+
+    transitionTicket(ticket.id, "abgelehnt");
+
+    db.update(approvals)
+      .set({
+        status: "abgelehnt",
+        decisionNote: note,
+        decidedAt: new Date().toISOString(),
+      })
+      .where(eq(approvals.id, approval.id))
       .run();
 
     revalidateApprovalPages(ticket.id);
@@ -9512,7 +10615,7 @@ Dieser Task baut die Genehmigungsseite (`/genehmigungen`) und die Server Actions
 - [ ] **Step 4: Tests ausführen, Erfolg verifizieren**
 
   Run: `npx vitest run tests/app/actions/approvals.test.ts`
-  Expected: PASS (7 Tests grün).
+  Expected: PASS (11 Tests grün).
 
 - [ ] **Step 5: Commit**
 
