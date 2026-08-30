@@ -7,6 +7,16 @@ const envSchema = z.object({
   ANTHROPIC_API_KEY: z.string().min(1),
   IMAP_HOST: z.string().default("imap.fastmail.com"),
   IMAP_PORT: z.coerce.number().default(993),
+  // Postfach-Ordner, der auf neue Mails an MAIL_ALIAS durchsucht wird. Default
+  // "INBOX" erhält das bisherige Verhalten fuer bestehende Konfigurationen.
+  // Sortiert eine Fastmail-Regel den Alias in einen eigenen Ordner (guter,
+  // datenschutzfreundlicher Stil — der Worker fasst die private Inbox dann gar
+  // nicht erst an), muss diese Variable auf genau diesen Ordnernamen zeigen.
+  // .trim() faengt ein versehentlich mitkopiertes Leerzeichen vorn/hinten ab,
+  // da Ordnernamen (z. B. "Hausverwaltung TOOL FOM") selbst Leerzeichen
+  // enthalten koennen und ein reiner Whitespace-Unterschied sonst zu einem
+  // schwer auffindbaren "Ordner nicht gefunden"-Fehler fuehren wuerde.
+  IMAP_MAILBOX: z.string().trim().min(1).default("INBOX"),
   SMTP_HOST: z.string().default("smtp.fastmail.com"),
   SMTP_PORT: z.coerce.number().default(465),
   MAIL_USER: z.string().min(1),          // Fastmail-Login
@@ -57,6 +67,7 @@ const FIELD_HINTS: Record<string, string> = {
   ANTHROPIC_API_KEY: "ein Anthropic-API-Schlüssel (siehe https://console.anthropic.com)",
   IMAP_HOST: "der Hostname des IMAP-Servers",
   IMAP_PORT: "eine Portnummer (Zahl), z. B. 993",
+  IMAP_MAILBOX: "ein nicht-leerer Ordnername, z. B. INBOX",
   SMTP_HOST: "der Hostname des SMTP-Servers",
   SMTP_PORT: "eine Portnummer (Zahl), z. B. 465",
   MAIL_USER: "die vollständige Fastmail-Login-E-Mail-Adresse",

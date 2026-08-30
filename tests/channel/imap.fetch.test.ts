@@ -1,5 +1,5 @@
 import { Readable } from "node:stream";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Haertungsluecke: fetchNewEmails() (src/channel/imap.ts) hat NULL Testabdeckung
 // (nur die reine Hilfsfunktion filterToAlias wird in tests/channel/imap.test.ts
@@ -44,6 +44,7 @@ const {
   downloadMock,
   messageFlagsAddMock,
   logoutMock,
+  listMock,
   constructorMock,
   FakeImapFlow,
 } = vi.hoisted(() => {
@@ -54,6 +55,10 @@ const {
   const downloadMock = vi.fn();
   const messageFlagsAddMock = vi.fn().mockResolvedValue(undefined);
   const logoutMock = vi.fn().mockResolvedValue(undefined);
+  // Standardmäßig existiert nur INBOX — reicht für alle Tests, die den
+  // Default-Ordner verwenden. Tests für IMAP_MAILBOX auf einen eigenen Ordner
+  // überschreiben das gezielt mit mockResolvedValueOnce().
+  const listMock = vi.fn().mockResolvedValue([{ path: "INBOX" }]);
   const constructorMock = vi.fn();
 
   class FakeImapFlow {
@@ -66,6 +71,7 @@ const {
     download = downloadMock;
     messageFlagsAdd = messageFlagsAddMock;
     logout = logoutMock;
+    list = listMock;
   }
 
   return {
@@ -76,6 +82,7 @@ const {
     downloadMock,
     messageFlagsAddMock,
     logoutMock,
+    listMock,
     constructorMock,
     FakeImapFlow,
   };
@@ -83,7 +90,7 @@ const {
 
 vi.mock("imapflow", () => ({ ImapFlow: FakeImapFlow }));
 
-import { fetchNewEmails, markEmailsSeen } from "@/channel/imap";
+import { fetchNewEmails, markEmailsSeen, ImapMailboxNotFoundError } from "@/channel/imap";
 
 const ALIAS = "hausverwaltung@example.com";
 
@@ -128,15 +135,19 @@ describe("fetchNewEmails (echte IMAP-Orchestrierung, imapflow gemockt)", () => {
     process.env.MAIL_PASSWORD = "app-passwort";
     process.env.MAIL_ALIAS = ALIAS;
     process.env.DASHBOARD_PASSWORD = "test";
+    delete process.env.IMAP_MAILBOX;
 
     constructorMock.mockClear();
     connectMock.mockClear();
     lockReleaseMock.mockClear();
     getMailboxLockMock.mockClear();
+    getMailboxLockMock.mockResolvedValue({ release: lockReleaseMock });
     searchMock.mockReset();
     downloadMock.mockReset();
     messageFlagsAddMock.mockClear();
     logoutMock.mockClear();
+    listMock.mockClear();
+    listMock.mockResolvedValue([{ path: "INBOX" }]);
   });
 
   it("sucht serverseitig bereits eingeschränkt (seen:false, or[to,cc]=MAIL_ALIAS)", async () => {
@@ -241,13 +252,17 @@ describe("markEmailsSeen (quittiert Mails erst NACH erfolgreicher Persistierung 
     process.env.MAIL_PASSWORD = "app-passwort";
     process.env.MAIL_ALIAS = ALIAS;
     process.env.DASHBOARD_PASSWORD = "test";
+    delete process.env.IMAP_MAILBOX;
 
     constructorMock.mockClear();
     connectMock.mockClear();
     lockReleaseMock.mockClear();
     getMailboxLockMock.mockClear();
+    getMailboxLockMock.mockResolvedValue({ release: lockReleaseMock });
     messageFlagsAddMock.mockClear();
     logoutMock.mockClear();
+    listMock.mockClear();
+    listMock.mockResolvedValue([{ path: "INBOX" }]);
   });
 
   it("markiert die übergebenen UIDs als \\Seen und gibt Lock/Verbindung frei", async () => {
@@ -276,5 +291,104 @@ describe("markEmailsSeen (quittiert Mails erst NACH erfolgreicher Persistierung 
     expect(connectMock).toHaveBeenCalledTimes(1);
     expect(logoutMock).toHaveBeenCalledTimes(1);
     expect(lockReleaseMock).not.toHaveBeenCalled();
+  });
+});
+
+// Kern des Bugfixes: der Auftraggeber hat in seinem Fastmail-Konto eine Regel
+// eingerichtet, die Mails an den Alias in einen EIGENEN Ordner ("Hausverwaltung
+// TOOL FOM") sortiert, statt sie in der INBOX zu belassen — guter, datenschutz-
+// freundlicher Stil (der Worker fasst die private Inbox dann gar nicht erst
+// an). Der Worker durchsuchte aber fest verdrahtet nur "INBOX", fand dort
+// nichts und lief scheinbar erfolgreich, aber leer. IMAP_MAILBOX macht den
+// durchsuchten Ordner konfigurierbar; beide Funktionen (fetchNewEmails,
+// markEmailsSeen) MÜSSEN denselben Ordner verwenden — quittiert markEmailsSeen
+// im falschen Postfach, würden Mails endlos erneut geholt.
+describe("IMAP_MAILBOX (konfigurierbarer Postfach-Ordner statt fest verdrahtetem INBOX)", () => {
+  beforeEach(() => {
+    process.env.ANTHROPIC_API_KEY = "test";
+    process.env.MAIL_USER = "login@example.com";
+    process.env.MAIL_PASSWORD = "app-passwort";
+    process.env.MAIL_ALIAS = ALIAS;
+    process.env.DASHBOARD_PASSWORD = "test";
+    delete process.env.IMAP_MAILBOX;
+
+    constructorMock.mockClear();
+    connectMock.mockClear();
+    lockReleaseMock.mockClear();
+    getMailboxLockMock.mockClear();
+    getMailboxLockMock.mockResolvedValue({ release: lockReleaseMock });
+    searchMock.mockReset();
+    searchMock.mockResolvedValue([]);
+    downloadMock.mockReset();
+    messageFlagsAddMock.mockClear();
+    logoutMock.mockClear();
+    listMock.mockClear();
+    listMock.mockResolvedValue([{ path: "INBOX" }]);
+  });
+
+  afterEach(() => {
+    delete process.env.IMAP_MAILBOX;
+  });
+
+  it("verwendet standardmäßig INBOX, wenn IMAP_MAILBOX nicht gesetzt ist (unverändertes Verhalten für bestehende Konfigurationen)", async () => {
+    await fetchNewEmails();
+    expect(getMailboxLockMock).toHaveBeenCalledWith("INBOX");
+
+    getMailboxLockMock.mockClear();
+    await markEmailsSeen([1]);
+    expect(getMailboxLockMock).toHaveBeenCalledWith("INBOX");
+  });
+
+  it("verwendet einen konfigurierten Ordner (inkl. Trimmen von Leer­zeichen) in BEIDEN Funktionen", async () => {
+    // Führendes/abschließendes Leerzeichen ist ein realistischer Fehler beim
+    // Kopieren des Ordnernamens aus der Fastmail-Oberfläche in die .env.
+    process.env.IMAP_MAILBOX = "  Hausverwaltung TOOL FOM  ";
+    listMock.mockResolvedValue([{ path: "INBOX" }, { path: "Hausverwaltung TOOL FOM" }]);
+
+    await fetchNewEmails();
+    expect(getMailboxLockMock).toHaveBeenCalledWith("Hausverwaltung TOOL FOM");
+
+    getMailboxLockMock.mockClear();
+    await markEmailsSeen([1]);
+    expect(getMailboxLockMock).toHaveBeenCalledWith("Hausverwaltung TOOL FOM");
+  });
+
+  it("wirft eine verständliche deutsche Fehlermeldung, wenn der konfigurierte Ordner nicht existiert — inkl. Liste der tatsächlich vorhandenen Ordner", async () => {
+    process.env.IMAP_MAILBOX = "Nicht Vorhanden";
+    // Steht stellvertretend für die technische IMAP-Meldung, die imapflow bei
+    // einem SELECT auf einen nicht existierenden Ordner tatsächlich wirft.
+    getMailboxLockMock.mockRejectedValue(
+      new Error("NO [NONEXISTENT] Unknown Mailbox: Nicht Vorhanden"),
+    );
+    listMock.mockResolvedValue([{ path: "INBOX" }, { path: "Hausverwaltung TOOL FOM" }]);
+
+    let caught: unknown;
+    try {
+      await fetchNewEmails();
+      expect.unreachable("fetchNewEmails() hätte werfen müssen");
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(ImapMailboxNotFoundError);
+    const message = (caught as Error).message;
+    expect(message).toContain("Nicht Vorhanden");
+    expect(message).toContain("IMAP_MAILBOX");
+    expect(message).toContain("INBOX");
+    expect(message).toContain("Hausverwaltung TOOL FOM");
+
+    // Verbindung wird trotzdem sauber geschlossen; der (nie erworbene) Lock
+    // wird nicht freigegeben — gleiche Absicherung wie bei jedem anderen
+    // Lock-Fehlschlag.
+    expect(logoutMock).toHaveBeenCalledTimes(1);
+    expect(lockReleaseMock).not.toHaveBeenCalled();
+  });
+
+  it("lässt den ursprünglichen Fehler unverändert durch, wenn der konfigurierte Ordner tatsächlich existiert (Ursache liegt woanders, z. B. Netzwerk)", async () => {
+    process.env.IMAP_MAILBOX = "Hausverwaltung TOOL FOM";
+    listMock.mockResolvedValue([{ path: "INBOX" }, { path: "Hausverwaltung TOOL FOM" }]);
+    getMailboxLockMock.mockRejectedValueOnce(new Error("Netzwerkfehler beim Öffnen"));
+
+    await expect(fetchNewEmails()).rejects.toThrow("Netzwerkfehler beim Öffnen");
   });
 });

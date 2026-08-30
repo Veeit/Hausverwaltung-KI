@@ -16,6 +16,7 @@ const MANAGED_KEYS = [
   "ANTHROPIC_API_KEY",
   "IMAP_HOST",
   "IMAP_PORT",
+  "IMAP_MAILBOX",
   "SMTP_HOST",
   "SMTP_PORT",
   "MAIL_USER",
@@ -62,6 +63,7 @@ describe("getEnv", () => {
     expect(env.DASHBOARD_PASSWORD).toBe("geheim");
     expect(env.IMAP_HOST).toBe("imap.fastmail.com");
     expect(env.IMAP_PORT).toBe(993);
+    expect(env.IMAP_MAILBOX).toBe("INBOX");
     expect(env.SMTP_HOST).toBe("smtp.fastmail.com");
     expect(env.SMTP_PORT).toBe(465);
     expect(env.MAIL_RATE_LIMIT_PER_HOUR).toBe(20);
@@ -77,6 +79,23 @@ describe("getEnv", () => {
     const env = getEnv();
     expect(env.IMAP_PORT).toBe(1993);
     expect(env.MAIL_RATE_LIMIT_PER_HOUR).toBe(3);
+  });
+
+  // Bugfix: ein Vermieter, der per Fastmail-Regel Mails an seinen Alias in
+  // einen eigenen Ordner sortiert (statt sie in der INBOX zu belassen),
+  // konfiguriert diesen Ordnernamen über IMAP_MAILBOX. Ordnernamen können
+  // Leerzeichen und Umlaute enthalten (z. B. "Hausverwaltung TOOL FOM") —
+  // ein beim Kopieren aus der Fastmail-Oberfläche versehentlich mitgenommenes
+  // führendes/abschließendes Leerzeichen darf dabei nicht zu einem "Ordner
+  // nicht gefunden"-Fehler führen.
+  it("übernimmt einen konfigurierten IMAP_MAILBOX-Ordnernamen unverändert (Leerzeichen und Umlaute erlaubt)", () => {
+    process.env.IMAP_MAILBOX = "Hausverwaltung TOOL FOM";
+    expect(getEnv().IMAP_MAILBOX).toBe("Hausverwaltung TOOL FOM");
+  });
+
+  it("entfernt führende/abschließende Leerzeichen aus IMAP_MAILBOX", () => {
+    process.env.IMAP_MAILBOX = "  Hausverwaltung TOOL FOM  ";
+    expect(getEnv().IMAP_MAILBOX).toBe("Hausverwaltung TOOL FOM");
   });
 
   it("wirft, wenn ein Pflichtfeld fehlt", () => {
