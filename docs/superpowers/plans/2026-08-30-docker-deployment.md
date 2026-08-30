@@ -23,6 +23,7 @@
 - Alle Log-Ausgaben des Supervisors und alle Dokumentation auf **Deutsch**; Code-Identifier englisch.
 - Kein ESLint (bewusst nicht Teil des PoC).
 - Commits: Präfixe `feat:` / `chore:` / `docs:`; jede Commit-Message endet mit einer Leerzeile und `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`.
+- **Host-Port 3100 statt 3000 in allen lokalen Verifikationsschritten:** Auf Veits Mac belegt ein fremder Next.js-Dev-Server Port 3000. Der Port *im* Container bleibt 3000; nur die Host-Seite weicht aus. In der CI (Task 5) bleibt es bei 3000, dort ist der Runner leer.
 - Task 6 enthält ein **Freigabe-Gate**: Vor dem Anlegen des GitHub-Repositories und dem ersten Push muss Veit ausdrücklich zustimmen.
 
 ## Dateiübersicht
@@ -892,7 +893,7 @@ PY
   Run:
 
   ```bash
-  RUN_WORKER=0 node docker/entrypoint.mjs > /tmp/hv-sup.log 2>&1 & echo $! > /tmp/hv-sup.pid; sleep 6; curl -s http://127.0.0.1:3000/api/health; echo; cat /tmp/hv-sup.log
+  PORT=3100 RUN_WORKER=0 node docker/entrypoint.mjs > /tmp/hv-sup.log 2>&1 & echo $! > /tmp/hv-sup.pid; sleep 6; curl -s http://127.0.0.1:3100/api/health; echo; cat /tmp/hv-sup.log
   ```
 
   Expected: `{"status":"ok","worker":"disabled"}`. Das Log enthält `[supervisor] starte web: ./node_modules/.bin/next start`, `[supervisor] Worker deaktiviert (RUN_WORKER=0)` und mindestens eine mit `[web]` präfixierte Zeile (z.B. `▲ Next.js`).
@@ -912,17 +913,21 @@ PY
   Run:
 
   ```bash
-  node docker/entrypoint.mjs > /tmp/hv-sup2.log 2>&1 & echo $! > /tmp/hv-sup2.pid; sleep 6; grep "nicht vorhanden" /tmp/hv-sup2.log
+  PORT=3100 node docker/entrypoint.mjs > /tmp/hv-sup2.log 2>&1 & echo $! > /tmp/hv-sup2.pid; sleep 6; grep "nicht vorhanden" /tmp/hv-sup2.log
   ```
 
   Expected: Zeile `[supervisor] src/worker/index.ts nicht vorhanden — starte nur das Dashboard`. (Ab MVP-Task 10 existiert die Datei, und stattdessen erscheint `[supervisor] starte worker: …`.)
 
 - [ ] **Step 6: Tod eines Kindprozesses beendet den Supervisor**
 
+  Der Kindprozess wird gezielt über `pgrep -P` (Kinder des Supervisors) beendet.
+  **Kein `pkill -f next`** verwenden: Auf diesem Rechner läuft ein fremder
+  Next.js-Dev-Server, den ein Musterabgleich mit erwischen würde.
+
   Run:
 
   ```bash
-  pkill -f "node_modules/.bin/next start" || pkill -f "next-server"; sleep 3; tail -3 /tmp/hv-sup2.log; ps -p "$(cat /tmp/hv-sup2.pid)" > /dev/null 2>&1 && echo "LAEUFT NOCH" || echo "BEENDET"
+  kill "$(pgrep -P "$(cat /tmp/hv-sup2.pid)" | head -1)"; sleep 3; tail -3 /tmp/hv-sup2.log; ps -p "$(cat /tmp/hv-sup2.pid)" > /dev/null 2>&1 && echo "LAEUFT NOCH" || echo "BEENDET"
   ```
 
   Expected: Das Log enthält eine `[supervisor] web beendet (…)`-Zeile, die letzte Ausgabe ist `BEENDET`. Damit ist belegt: Stirbt ein Prozess, endet der Container — Unraid startet ihn neu.
@@ -1075,7 +1080,8 @@ PY
         context: .
       image: ki-hausverwaltung:local
       ports:
-        - "3000:3000"
+        # Host-Port ueber HV_PORT ueberschreibbar, Standard 3000.
+        - "${HV_PORT:-3000}:3000"
       environment:
         # Ohne echte Zugangsdaten laeuft nur das Dashboard.
         RUN_WORKER: "0"
@@ -1106,9 +1112,9 @@ PY
   Run:
 
   ```bash
-  docker run -d --name hv-test -p 3000:3000 -e RUN_WORKER=0 ki-hausverwaltung:local
+  docker run -d --name hv-test -p 3100:3000 -e RUN_WORKER=0 ki-hausverwaltung:local
   sleep 12
-  curl -s http://127.0.0.1:3000/api/health; echo
+  curl -s http://127.0.0.1:3100/api/health; echo
   ```
 
   Expected: `{"status":"ok","worker":"disabled"}`.
@@ -1148,10 +1154,10 @@ PY
 
   ```bash
   docker rm -f hv-test
-  docker compose up -d
+  HV_PORT=3100 docker compose up -d
   sleep 12
   docker compose exec -T app sh -c 'echo bleibt > /app/data/persistenz.txt'
-  docker compose restart
+  HV_PORT=3100 docker compose restart
   sleep 12
   docker compose exec -T app cat /app/data/persistenz.txt
   ```
@@ -1164,9 +1170,9 @@ PY
 
   ```bash
   docker compose down
-  docker run -d --name hv-broken -p 3000:3000 -e RUN_WORKER=0 -e DATABASE_PATH=/app/gibt-es-nicht/db.sqlite ki-hausverwaltung:local
+  docker run -d --name hv-broken -p 3100:3000 -e RUN_WORKER=0 -e DATABASE_PATH=/app/gibt-es-nicht/db.sqlite ki-hausverwaltung:local
   sleep 12
-  curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/api/health
+  curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3100/api/health
   docker rm -f hv-broken
   ```
 
@@ -1336,8 +1342,8 @@ PY
   Der Workflow lässt sich vor dem Push nicht ausführen, das darin verwendete Kommando aber sehr wohl. Run:
 
   ```bash
-  docker run -d --name smoke -p 3000:3000 -e RUN_WORKER=0 ki-hausverwaltung:local
-  for _ in $(seq 1 30); do curl -fsS http://127.0.0.1:3000/api/health && break; sleep 2; done; echo
+  docker run -d --name smoke -p 3100:3000 -e RUN_WORKER=0 ki-hausverwaltung:local
+  for _ in $(seq 1 30); do curl -fsS http://127.0.0.1:3100/api/health && break; sleep 2; done; echo
   docker rm -f smoke
   ```
 
