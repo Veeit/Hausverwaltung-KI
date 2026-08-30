@@ -564,6 +564,11 @@ describe("send_reply", () => {
         status: "genehmigt",
       })
       .run();
+    // approveApproval setzt Genehmigung UND tickets.contractorId gemeinsam
+    // (siehe src/app/actions/approvals.ts) — hier nachgebildet, damit das
+    // Gate (das inzwischen tickets.contractorId als Quelle der Wahrheit
+    // nutzt, siehe Review-Befund Punkt 2) den realen Zustand vorfindet.
+    db.update(tickets).set({ contractorId: fixture.contractorId }).where(eq(tickets.id, ticketId)).run();
     transitionTicket(ticketId, "handwerker_angefragt", { force: true });
     const { calls, sendFn } = makeSendFnFake();
     const ctx = makeCtx(fixture, { ticketId, sendFn });
@@ -592,6 +597,7 @@ describe("send_reply", () => {
         status: "genehmigt",
       })
       .run();
+    db.update(tickets).set({ contractorId: fixture.contractorId }).where(eq(tickets.id, ticketId)).run();
     transitionTicket(ticketId, "terminiert", { force: true });
     const { calls, sendFn } = makeSendFnFake();
     const ctx = makeCtx(fixture, { ticketId, sendFn });
@@ -604,6 +610,64 @@ describe("send_reply", () => {
     expect(result.startsWith("FEHLER")).toBe(false);
     expect(calls).toHaveLength(1);
     expect(calls[0]!.to).toBe(fixture.contractorEmail);
+    expect(ctx.repliedToTenant).toBe(false);
+  });
+
+  // Review-Befund Punkt 2: Ein einmal beauftragter Handwerker behielt den
+  // Vorgang für immer, weil das Gate nur fragte, ob es JE eine genehmigte
+  // approvals-Zeile gab, ohne Bezug auf den AKTUELL zuständigen Handwerker.
+  // Nachgestellt: Klaus wird genehmigt (approvals-Zeile bleibt "genehmigt"),
+  // der Vermieter beauftragt danach Sven für denselben Vorgang (zweite
+  // Genehmigung überschreibt tickets.contractorId). Klaus darf danach KEINE
+  // Handwerker-Mail mehr senden, obwohl seine alte Genehmigung im Bestand
+  // bleibt.
+  it("handwerker (Klaus) mit alter, noch 'genehmigt' stehender Genehmigung, aber NICHT mehr aktuell beauftragt (Sven ist jetzt dran): FEHLER, keine Mail", async () => {
+    // fixture.contractorId/-Email spielt hier Klaus (der Absender der
+    // eingehenden Mail, ctx.contractor); Sven ist ein zweiter, später
+    // beauftragter Handwerker.
+    const ticketId = makeRepairTicket(fixture);
+    const { id: svenId } = db
+      .insert(contractors)
+      .values({ name: "Sven Schloss", email: "sven.neu@example.com", trade: "Schlüsseldienst" })
+      .returning({ id: contractors.id })
+      .get();
+    db.insert(approvals)
+      .values({
+        ticketId,
+        summary: "Türschloss klemmt, Klaus soll reparieren.",
+        contractorId: fixture.contractorId, // Klaus' alte, weiterhin "genehmigt" stehende Zeile
+        emailSubject: "Reparaturauftrag",
+        emailBody: "Bitte um Terminvorschlag.",
+        status: "genehmigt",
+      })
+      .run();
+    db.insert(approvals)
+      .values({
+        ticketId,
+        summary: "Türschloss klemmt, jetzt Sven statt Klaus.",
+        contractorId: svenId,
+        emailSubject: "Reparaturauftrag (neu)",
+        emailBody: "Bitte um Terminvorschlag.",
+        status: "genehmigt",
+      })
+      .run();
+    // approveApproval überschreibt tickets.contractorId bei jeder neuen
+    // Genehmigung — Sven ist jetzt der aktuell beauftragte Handwerker.
+    db.update(tickets).set({ contractorId: svenId }).where(eq(tickets.id, ticketId)).run();
+    transitionTicket(ticketId, "handwerker_angefragt", { force: true });
+    const { calls, sendFn } = makeSendFnFake();
+    // ctx.contractor ist weiterhin Klaus (er ist der Absender der eingehenden Mail).
+    const ctx = makeCtx(fixture, { ticketId, sendFn });
+    const tool = getTool(buildAgentTools(ctx), "send_reply");
+
+    const result = await tool.run({
+      recipient: "handwerker",
+      subject: "Terminbestätigung",
+      body: "Sehr geehrter Herr Schloss, der Termin passt dem Mieter.",
+    });
+
+    expect(result.startsWith("FEHLER: ")).toBe(true);
+    expect(calls).toHaveLength(0);
     expect(ctx.repliedToTenant).toBe(false);
   });
 

@@ -110,4 +110,34 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain('"status": "infosammlung"');
     expect(prompt).toContain("Türschloss defekt");
   });
+
+  // Review-Befund Punkt 3: Konnte für eine Handwerker-Nachricht kein
+  // eindeutiger Vorgang ermittelt werden (kein/fremder Betreff-Tag und kein
+  // oder mehr als ein offenes Ticket des Handwerkers), fehlt trigger.ticket.
+  // Ohne einen expliziten Hinweis könnte die KI entweder gar nicht reagieren
+  // oder Gefahr laufen, den falschen Vorgang zu erraten — der Prompt muss sie
+  // stattdessen zu ask_landlord anleiten.
+  it("weist die KI bei einer Handwerker-Nachricht ohne zuordenbaren Vorgang an, per ask_landlord nachzufragen statt zu raten", () => {
+    const { conversationId } = seedWorld();
+    const msgId = Number(
+      db
+        .insert(messages)
+        .values({
+          conversationId,
+          direction: "inbound",
+          role: "contractor",
+          fromEmail: "sven.schloss@example.com",
+          toEmail: "hausverwaltung@example.com",
+          subject: "Terminvorschlag", // kein [HV-n]-Tag
+          body: "Dienstag 9 Uhr passt mir.",
+        })
+        .run().lastInsertRowid,
+    );
+
+    const prompt = buildSystemPrompt(loadTriggerInfo(msgId));
+
+    expect(prompt).toContain("Kein Vorgang eindeutig zuordenbar");
+    expect(prompt).toContain("ask_landlord");
+    expect(prompt).not.toContain("## Aktueller Ticket-Zustand");
+  });
 });

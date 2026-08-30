@@ -423,20 +423,17 @@ export function buildAgentTools(ctx: AgentToolContext): AgentToolSpec[] {
           // selbst herbeiführen (z.B. neu → eskaliert via ask_landlord → terminiert via
           // update_ticket, ein Rückweg, der für die Wiederaufnahme nach einer Vermieter-
           // Antwort existiert), ohne dass je eine Genehmigung stattfand. Deshalb zusätzlich
-          // verifizieren, dass eine tatsächlich genehmigte approvals-Zeile für GENAU dieses
-          // Ticket und GENAU diesen Handwerker existiert.
-          const approval = db
-            .select()
-            .from(approvals)
-            .where(
-              and(
-                eq(approvals.ticketId, ctx.ticketId),
-                eq(approvals.status, "genehmigt"),
-                eq(approvals.contractorId, ctx.contractor.id),
-              ),
-            )
-            .get();
-          if (!approval) {
+          // verifizieren, dass GENAU dieser Handwerker AKTUELL für das Ticket beauftragt ist
+          // (tickets.contractorId). tickets.contractorId wird ausschließlich von
+          // approveApproval gesetzt — der Vergleich bestätigt also sowohl, dass eine echte
+          // Genehmigung stattfand, ALS AUCH, dass sie noch aktuell ist: Beauftragt der
+          // Vermieter später einen ANDEREN Handwerker für dasselbe Ticket (zweite
+          // Genehmigung nach Eskalation), überschreibt approveApproval tickets.contractorId
+          // — der zuvor beauftragte Handwerker darf dann keine Handwerker-Mails mehr
+          // senden, auch wenn seine alte approvals-Zeile weiterhin auf "genehmigt" steht
+          // (Review-Befund: ein einmal beauftragter Handwerker behielt den Vorgang sonst
+          // für immer).
+          if (ticket.contractorId !== ctx.contractor.id) {
             // request_approval nur empfehlen, wenn der Ticket-Status das aktuell
             // überhaupt zuließe (canTransition prüft das exakt so wie
             // request_approval selbst). Sonst würde die Meldung das Modell auf
@@ -449,7 +446,7 @@ export function buildAgentTools(ctx: AgentToolContext): AgentToolSpec[] {
             )
               ? "nutze request_approval"
               : "wende dich per ask_landlord an den Vermieter";
-            return `FEHLER: Der Vermieter hat den Handwerker ${ctx.contractor.name} für diesen Vorgang noch nicht freigegeben (keine Genehmigung in den Vermieter-Unterlagen gefunden, Ticket-Status: ${ticket.status}). Informiere stattdessen den Mieter oder ${naechsterSchritt}.`;
+            return `FEHLER: Der Vermieter hat den Handwerker ${ctx.contractor.name} für diesen Vorgang nicht (mehr) freigegeben (aktuell beauftragt: ${ticket.contractorId !== null ? "ein anderer Handwerker" : "niemand"}, Ticket-Status: ${ticket.status}). Informiere stattdessen den Mieter oder ${naechsterSchritt}.`;
           }
           to = ctx.contractor.email;
           targetConversationId = findOrCreateConversation({

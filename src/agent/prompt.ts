@@ -40,6 +40,19 @@ export function buildSystemPrompt(trigger: TriggerInfo): string {
     lines.push("## Aktueller Ticket-Zustand (JSON)");
     lines.push(JSON.stringify(trigger.ticket, null, 2));
     lines.push("");
+  } else if (trigger.kind === "contractor_message" && trigger.contractor) {
+    // Kein Ticket konnte zugeordnet werden: entweder fehlt ein gültiger
+    // Betreff-Tag UND der Handwerker hat gerade kein oder mehr als ein
+    // offenes Ticket (siehe findLatestOpenTicketForContractor in
+    // src/agent/context.ts — bei mehreren offenen Vorgängen wird bewusst
+    // KEINER geraten), oder der genannte Tag gehört nicht zu diesem
+    // Handwerker. Ohne diesen Hinweis würde die KI mangels Kontext entweder
+    // gar nicht reagieren oder Gefahr laufen, blind zu raten.
+    lines.push("## Hinweis: Kein Vorgang eindeutig zuordenbar");
+    lines.push(
+      "Zu dieser Handwerker-Nachricht konnte kein eindeutiger Vorgang ermittelt werden — entweder fehlt ein gültiger [HV-n]-Betreff-Tag und der Handwerker ist gerade für keinen oder für MEHR ALS EINEN offenen Vorgang beauftragt, oder der genannte Tag gehört nicht zu ihm. Rate NICHT, um welchen Vorgang es geht — nutze ask_landlord und bitte den Vermieter, den richtigen Vorgang zu benennen.",
+    );
+    lines.push("");
   }
 
   lines.push("## Verfügbare Handwerker (id | Name | Gewerk)");

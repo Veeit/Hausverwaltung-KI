@@ -1,6 +1,6 @@
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { getDb } from "@/db/client";
-import { approvals, contractors, tenants, tickets } from "@/db/schema";
+import { contractors, tenants, tickets } from "@/db/schema";
 import { extractTicketId } from "@/lib/subject";
 
 /**
@@ -12,12 +12,27 @@ import { extractTicketId } from "@/lib/subject";
  *
  * Berechtigt sind:
  * - der Mieter, dem das Ticket gehört (tickets.tenantId)
- * - ein Handwerker, der für GENAU dieses Ticket beauftragt ist — entweder
- *   über tickets.contractorId oder über eine genehmigte approvals-Zeile für
- *   dieses Ticket und diesen Handwerker (deckt den Zeitraum zwischen
- *   Genehmigung und dem Setzen von tickets.contractorId in approveApproval
- *   ab, sowie den Fall, dass mehrere Handwerker im Lauf der Zeit an einem
- *   Ticket beteiligt waren).
+ * - der Handwerker, der AKTUELL für dieses Ticket beauftragt ist
+ *   (tickets.contractorId)
+ *
+ * Beide Zweige (Mieter- UND Handwerker-Tabelle) werden unabhängig von der
+ * beim Ingest ermittelten Rolle (input.role) geprüft: Steht dieselbe Adresse
+ * SOWOHL als Mieter ALS AUCH als Handwerker in den Stammdaten (realistisch,
+ * z. B. ein Hausmeister, der selbst im Haus wohnt), gewinnt bei der
+ * Rollenklassifikation in worker/processor.ts immer der Mieter — würde hier
+ * nur der Mieter-Zweig geprüft, liefe eine Handwerker-Antwort dieser Adresse
+ * grundlos ins Leere.
+ *
+ * Bewusst NICHT (mehr) geprüft: eine genehmigte approvals-Zeile allein.
+ * Damit würde ein Handwerker, der für ein Ticket EINMAL genehmigt war,
+ * unbegrenzt Zugriff behalten, selbst nachdem der Vermieter einen anderen
+ * Handwerker beauftragt und tickets.contractorId dadurch überschrieben hat
+ * (approveApproval setzt Genehmigung UND contractorId in derselben Aktion,
+ * kurz nacheinander — der einzige denkbare Zeitraum dazwischen liegt
+ * innerhalb dieser einen Aktion und wird von dieser Funktion nie in diesem
+ * Fenster aufgerufen, da eingehende Handwerker-Mails immer aus einer
+ * separaten, späteren Anfrage stammen). tickets.contractorId ist deshalb die
+ * einzige verlässliche Quelle für "aktuell beauftragt".
  *
  * Diese Funktion ist die EINZIGE Stelle, die den Tag in eine Ticket-Id
  * übersetzt — sowohl beim Ingest (src/worker/processor.ts) als auch bei der
@@ -48,37 +63,27 @@ export function resolveAuthorizedTaggedTicketId(input: {
   const email = input.fromEmail.trim().toLowerCase();
   let authorized = false;
 
-  if (input.role === "tenant") {
+  // role "landlord"/"ai": der Betreff-Tag allein berechtigt nie — Vermieter-
+  // Nachrichten hängen ihr Ticket explizit über messages.ticketId an (siehe
+  // rejectApproval, answerEscalation), nicht über den Betreff. role
+  // "unknown" kann per Definition (siehe worker/processor.ts) mit keiner der
+  // beiden Tabellen matchen, muss die Zweige unten also gar nicht erst prüfen.
+  if (input.role !== "landlord" && input.role !== "ai" && input.role !== "unknown") {
     const tenant = db.select({ id: tenants.id }).from(tenants).where(eq(tenants.email, email)).get();
-    authorized = tenant !== undefined && ticket.tenantId === tenant.id;
-  } else if (input.role === "contractor") {
-    const contractor = db
-      .select({ id: contractors.id })
-      .from(contractors)
-      .where(eq(contractors.email, email))
-      .get();
-    if (contractor) {
-      if (ticket.contractorId === contractor.id) {
+    if (tenant && ticket.tenantId === tenant.id) {
+      authorized = true;
+    }
+    if (!authorized) {
+      const contractor = db
+        .select({ id: contractors.id })
+        .from(contractors)
+        .where(eq(contractors.email, email))
+        .get();
+      if (contractor && ticket.contractorId === contractor.id) {
         authorized = true;
-      } else {
-        const approval = db
-          .select({ id: approvals.id })
-          .from(approvals)
-          .where(
-            and(
-              eq(approvals.ticketId, taggedId),
-              eq(approvals.contractorId, contractor.id),
-              eq(approvals.status, "genehmigt"),
-            ),
-          )
-          .get();
-        authorized = approval !== undefined;
       }
     }
   }
-  // role "landlord" / "unknown" / "ai": der Betreff-Tag allein berechtigt nie —
-  // Vermieter-Nachrichten hängen ihr Ticket explizit über messages.ticketId an
-  // (siehe rejectApproval, answerEscalation), nicht über den Betreff.
 
   if (authorized) return taggedId;
 

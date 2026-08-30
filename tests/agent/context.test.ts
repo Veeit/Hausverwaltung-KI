@@ -379,7 +379,12 @@ describe("loadTriggerInfo", () => {
     expect(trigger.tenant?.name).toBe("Max Mustermann");
   });
 
-  it("contractor_message: ohne Betreff-Tag genügt auch eine genehmigte approvals-Zeile (ohne gesetztes tickets.contractorId)", () => {
+  // Review-Befund Punkt 2: Eine genehmigte approvals-Zeile allein genügt NICHT
+  // mehr als Rückfall-Kriterium — tickets.contractorId ist die einzige Quelle
+  // der Wahrheit für "aktuell beauftragt" (siehe src/lib/ticketAccess.ts).
+  // Ohne gesetztes tickets.contractorId (im echten Ablauf setzt approveApproval
+  // beides gemeinsam) darf der Rückfall dieses Ticket NICHT finden.
+  it("contractor_message: ohne Betreff-Tag genügt eine genehmigte approvals-Zeile ALLEIN nicht mehr (tickets.contractorId ist nicht gesetzt)", () => {
     const { tenantId, conversationId } = seedTenantWorld();
     const contractorId = Number(
       db
@@ -421,7 +426,85 @@ describe("loadTriggerInfo", () => {
       body: "Ich kann Mittwoch vorbei.",
     });
 
-    expect(loadTriggerInfo(msgId).ticket?.id).toBe(ticketId);
+    expect(loadTriggerInfo(msgId).ticket).toBeNull();
+  });
+
+  // Review-Befund Punkt 3: Ist ein Handwerker aktuell für MEHR ALS EIN
+  // offenes Ticket beauftragt und schreibt ohne Betreff-Tag, darf der
+  // Rückfall NICHT einfach "das jüngste" raten (orderBy(desc(id)).limit(1))
+  // — sonst ginge eine Terminbestätigung an den falschen Mieter. In diesem
+  // Fall ist keine sichere Zuordnung möglich: kein Ticket statt eines
+  // geratenen.
+  it("contractor_message: ohne Betreff-Tag bleibt das Ticket null, wenn der Handwerker für MEHR ALS EIN offenes Ticket aktuell beauftragt ist (keine sichere Zuordnung möglich)", () => {
+    const { tenantId, conversationId } = seedTenantWorld();
+    const contractorId = Number(
+      db
+        .insert(contractors)
+        .values({ name: "Sven Schloss", email: "sven.schloss@example.com", trade: "Schlüsseldienst" })
+        .run().lastInsertRowid,
+    );
+    const contractorConvId = Number(
+      db
+        .insert(conversations)
+        .values({
+          counterpartType: "contractor",
+          counterpartId: contractorId,
+          counterpartEmail: "sven.schloss@example.com",
+        })
+        .run().lastInsertRowid,
+    );
+    // Zweiter Mieter mit eigenem, ebenfalls offenem Ticket, für das derselbe
+    // Handwerker beauftragt ist.
+    const { tenantId: secondTenantId, conversationId: secondConversationId } = (() => {
+      const propertyId = Number(
+        db.insert(properties).values({ address: "Nebenstraße 2, 20095 Hamburg" }).run().lastInsertRowid,
+      );
+      const secondTenantId = Number(
+        db
+          .insert(tenants)
+          .values({ name: "Bert Mieter", email: "bert@example.com", propertyId })
+          .run().lastInsertRowid,
+      );
+      const secondConversationId = Number(
+        db
+          .insert(conversations)
+          .values({ counterpartType: "tenant", counterpartId: secondTenantId, counterpartEmail: "bert@example.com" })
+          .run().lastInsertRowid,
+      );
+      return { tenantId: secondTenantId, conversationId: secondConversationId };
+    })();
+    db.insert(tickets)
+      .values({
+        tenantId,
+        conversationId,
+        type: "reparatur",
+        status: "handwerker_angefragt",
+        title: "Türschloss defekt (Annas Vorgang)",
+        contractorId,
+      })
+      .run();
+    db.insert(tickets)
+      .values({
+        tenantId: secondTenantId,
+        conversationId: secondConversationId,
+        type: "reparatur",
+        status: "handwerker_angefragt",
+        title: "Fallrohr verstopft (Berts Vorgang)",
+        contractorId,
+      })
+      .run();
+    const msgId = insertMessage({
+      conversationId: contractorConvId,
+      role: "contractor",
+      fromEmail: "sven.schloss@example.com",
+      subject: "Terminvorschlag", // KEIN [HV-…]-Tag
+      body: "Dienstag 9 Uhr passt mir.",
+    });
+
+    const trigger = loadTriggerInfo(msgId);
+
+    expect(trigger.ticket).toBeNull();
+    expect(trigger.tenant).toBeNull();
   });
 
   // Sichert Punkt 1 (Berechtigungsprüfung) auch für den Rückfall ab: Ein

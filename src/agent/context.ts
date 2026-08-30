@@ -1,9 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { readFileSync } from "node:fs";
-import { and, desc, eq, isNotNull, ne, or } from "drizzle-orm";
+import { and, desc, eq, ne } from "drizzle-orm";
 import { getDb } from "@/db/client";
 import {
-  approvals,
   attachments,
   contractors,
   conversations,
@@ -57,36 +56,28 @@ function loadTenantByEmail(email: string): (TenantRow & { propertyAddress: strin
 
 /**
  * Rückfall für einen Handwerker, der ohne (oder mit fremdem, verworfenem)
- * Betreff-Tag schreibt: jüngstes nicht-erledigtes Ticket, für das GENAU dieser
- * Handwerker tatsächlich beauftragt ist — spiegelt exakt die
- * Berechtigungsprüfung aus resolveAuthorizedTaggedTicketId (tickets.contractorId
- * ODER eine genehmigte approvals-Zeile). Ohne diese Einschränkung könnte der
- * Rückfall die Berechtigungsprüfung aus Punkt 1 unterlaufen, indem er einfach
- * das jüngste offene Ticket IRGENDEINES Mieters findet.
+ * Betreff-Tag schreibt: das nicht-erledigte Ticket, für das GENAU dieser
+ * Handwerker AKTUELL beauftragt ist (tickets.contractorId) — spiegelt exakt
+ * die Berechtigungsprüfung aus resolveAuthorizedTaggedTicketId. Ohne diese
+ * Einschränkung könnte der Rückfall die Berechtigungsprüfung unterlaufen,
+ * indem er einfach das jüngste offene Ticket IRGENDEINES Mieters findet.
+ *
+ * Eindeutigkeit ist Pflicht: Ist der Handwerker aktuell für MEHR ALS EIN
+ * offenes Ticket beauftragt (z. B. Klaus repariert sowohl bei Anna als auch
+ * bei Bert), ist ohne Betreff-Tag keine sichere Zuordnung möglich — "das
+ * jüngste" zu raten hätte eine Terminbestätigung an den falschen Mieter
+ * geschickt (Review-Befund). In diesem Fall lieber KEINE Zuordnung (null)
+ * als eine falsche: der Systemprompt weist die KI an, in diesem Fall den
+ * Vermieter per ask_landlord um Klärung zu bitten, statt zu raten.
  */
 function findLatestOpenTicketForContractor(contractorId: number): TicketRow | null {
   const db = getDb();
-  const row = db
-    .select({ ticket: tickets })
+  const openTickets = db
+    .select()
     .from(tickets)
-    .leftJoin(
-      approvals,
-      and(
-        eq(approvals.ticketId, tickets.id),
-        eq(approvals.contractorId, contractorId),
-        eq(approvals.status, "genehmigt"),
-      ),
-    )
-    .where(
-      and(
-        ne(tickets.status, "erledigt"),
-        or(eq(tickets.contractorId, contractorId), isNotNull(approvals.id)),
-      ),
-    )
-    .orderBy(desc(tickets.id))
-    .limit(1)
-    .get();
-  return row ? row.ticket : null;
+    .where(and(ne(tickets.status, "erledigt"), eq(tickets.contractorId, contractorId)))
+    .all();
+  return openTickets.length === 1 ? openTickets[0] : null;
 }
 
 export function loadTriggerInfo(messageId: number): TriggerInfo {
