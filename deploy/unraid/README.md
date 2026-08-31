@@ -105,13 +105,32 @@ curl -s http://UNRAID-IP:3080/api/health
 
 Erwartet: `{"status":"ok","worker":"enabled"}`.
 
-Antwortet der Endpunkt mit `{"status":"error", …}`, ist
-`/mnt/user/appdata/ki-hausverwaltung` für den Benutzer 99:100 nicht
-beschreibbar. Korrigieren mit:
+Antwortet der Endpunkt mit `{"status":"error", …}`, nennt die Meldung selbst
+die Ursache. Es gibt genau zwei:
+
+**`"Datenverzeichnis /app/data ist nicht beschreibbar"`** — das Verzeichnis
+gibt es, aber der Container-Benutzer 99:100 darf nicht hineinschreiben.
+Korrigieren mit:
 
 ```bash
 chown -R 99:100 /mnt/user/appdata/ki-hausverwaltung
 ```
+
+**`"Datenverzeichnis /app/data existiert nicht"`** — der Pfad ist im Container
+gar nicht vorhanden. Das bedeutet fast immer, dass der Host-Pfad falsch
+eingetragen ist (Tippfehler im Feld „Path" bzw. in der Compose-Datei) oder die
+Freigabe `appdata` den Ordner noch nicht enthält. Ein `chown` hilft hier
+**nicht** — es schlägt mit `No such file or directory` fehl. Stattdessen den
+Ordner anlegen und die Container-Konfiguration prüfen:
+
+```bash
+mkdir -p /mnt/user/appdata/ki-hausverwaltung
+chown -R 99:100 /mnt/user/appdata/ki-hausverwaltung
+```
+
+Danach im Docker-Tab kontrollieren, dass die Zuordnung wirklich
+`/mnt/user/appdata/ki-hausverwaltung` → `/app/data` lautet, und den Container
+neu starten.
 
 Im Container-Log stehen beide Prozesse mit Präfix: `[web]` für das Dashboard,
 `[worker]` für den Mail-Worker, `[supervisor]` für Start und Stopp.
