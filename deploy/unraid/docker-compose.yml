@@ -1,0 +1,38 @@
+# Fuer das Unraid-Plugin "Compose Manager": neuen Stack anlegen und diesen
+# Inhalt einfuegen. Die Platzhalter in Grossbuchstaben vorher ersetzen.
+services:
+  ki-hausverwaltung:
+    image: ghcr.io/veeit/hausverwaltung-ki:latest
+    container_name: ki-hausverwaltung
+    restart: unless-stopped
+    ports:
+      # Host-Port 3080 -> Container-Port 3000
+      - "3080:3000"
+    volumes:
+      - /mnt/user/appdata/ki-hausverwaltung:/app/data
+    environment:
+      TZ: Europe/Berlin
+
+      # --- Pflichtwerte ---
+      ANTHROPIC_API_KEY: SK-ANT-HIER-EINTRAGEN
+      MAIL_USER: konto@example.com
+      MAIL_PASSWORD: FASTMAIL-APP-PASSWORT
+      MAIL_ALIAS: hausverwaltung@example.com
+      DASHBOARD_PASSWORD: DASHBOARD-PASSWORT
+
+      # --- Optional, hier mit den Standardwerten ---
+      IMAP_HOST: imap.fastmail.com
+      IMAP_PORT: "993"
+      IMAP_MAILBOX: INBOX
+      IMAP_LOOKBACK_DAYS: "3"
+      SMTP_HOST: smtp.fastmail.com
+      SMTP_PORT: "465"
+      MAIL_RATE_LIMIT_PER_HOUR: "20"
+      POLL_INTERVAL_MS: "30000"
+      LANDLORD_NAME: Der Vermieter
+
+      # Auf "0" setzen, um den Mail-Worker abzuschalten (nur Dashboard).
+      RUN_WORKER: "1"
+
+    # DATABASE_PATH und ATTACHMENTS_DIR sind im Image bereits auf
+    # /app/data/... gesetzt und duerfen hier nicht ueberschrieben werden.

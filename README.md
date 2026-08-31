@@ -286,3 +286,7 @@ npm run build    # Produktions-Build des Dashboards
   versehentliches Anklicken einer Mail im Mail-Client die Verarbeitung wieder,
   genau wie vor diesem Fix. Der Worker meldet diesen Fall beim Start einmalig
   im Log.
+
+## Betrieb im Container
+
+Siehe `deploy/unraid/README.md`.
