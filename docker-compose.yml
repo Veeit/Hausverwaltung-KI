@@ -6,11 +6,16 @@ services:
       context: .
     image: ki-hausverwaltung:local
     ports:
-      # Host-Port ueber HV_PORT ueberschreibbar, Standard 3000.
-      - "${HV_PORT:-3000}:3000"
+      # Host-Port ueber HV_PORT ueberschreibbar, Standard 3100 (Port 3000 ist
+      # auf diesem Rechner haeufig durch einen anderen Dev-Server belegt).
+      - "${HV_PORT:-3100}:3000"
     environment:
-      # Ohne echte Zugangsdaten laeuft nur das Dashboard.
+      # Ohne DASHBOARD_PASSWORD leitet der Proxy fail-closed jeden Pfad auf
+      # /login um (kein Passwort kann dort je passen) - erreichbar bleibt nur
+      # /api/health. Der Wert unten ist ein Wegwerf-Passwort nur fuer den
+      # lokalen Test, kein echtes Geheimnis.
       RUN_WORKER: "0"
+      DASHBOARD_PASSWORD: lokal-nur-test
     volumes:
       - hv-data:/app/data
     restart: unless-stopped

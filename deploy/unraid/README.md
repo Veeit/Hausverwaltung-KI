@@ -13,6 +13,22 @@ enthält Dashboard und Mail-Worker in einem Container.
 | Prozessbenutzer | uid `99`, gid `100` (`nobody:users`) |
 | Health-Endpunkt | `GET /api/health` |
 
+> **Einmalig nach dem ersten erfolgreichen Workflow-Lauf:** Ein per
+> `GITHUB_TOKEN` aus einem Workflow veröffentlichtes GHCR-Paket ist **nicht**
+> automatisch öffentlich, nur weil das Repository öffentlich ist — GitHub legt
+> Container-Pakete standardmäßig privat an. Der Repo-Besitzer muss die
+> Sichtbarkeit einmal von Hand umstellen: GitHub → Packages →
+> `hausverwaltung-ki` → Package settings → Change visibility → Public.
+>
+> Prüfen:
+>
+> ```bash
+> gh api /user/packages/container/hausverwaltung-ki --jq .visibility
+> ```
+>
+> Erwartet: `public`. Bleibt das Paket privat (Ausgabe `private`), gilt
+> stattdessen der eingeklappte Login-Fallback weiter unten in Abschnitt 1.
+
 ## 1. Registry-Zugriff
 
 Das Paket ist **öffentlich**. Unraid kann das Image ohne Anmeldung ziehen —
@@ -167,7 +183,8 @@ angefordert wird.
 
 ## 6. Zurückrollen
 
-Jeder Build veröffentlicht zusätzlich einen Tag `sha-<kurz>`. Zum Zurückrollen
+Jeder Build auf `main` oder einem Tag `v*` veröffentlicht zusätzlich einen Tag
+`sha-<kurz>` (Pull-Request-Builds veröffentlichen gar nichts). Zum Zurückrollen
 im Repository-Feld des Containers `:latest` durch den gewünschten
 `sha-…`-Tag ersetzen und den Container neu anlegen lassen. Die verfügbaren
 Tags stehen auf GitHub unter „Packages".

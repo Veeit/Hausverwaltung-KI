@@ -6,7 +6,10 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 
 const WORKER_ENTRY = "src/worker/index.ts";
-const SHUTDOWN_TIMEOUT_MS = 10_000;
+// Muss unter Dockers Standard-Stop-Timeout (10s) bleiben: sonst kann Docker
+// den Container per SIGKILL beenden, waehrend der Supervisor selbst noch auf
+// sein eigenes Zeitlimit wartet, bevor er eskaliert.
+const SHUTDOWN_TIMEOUT_MS = 8_000;
 
 /** @type {{ name: string, child: import("node:child_process").ChildProcess, settled: boolean }[]} */
 const children = [];

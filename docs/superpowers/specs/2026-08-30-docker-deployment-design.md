@@ -24,6 +24,11 @@ Container, der Dashboard und Worker enthält. Vorbild ist
 
 ## 3. Getroffene Entscheidungen
 
+> **Überholt (2026-08-31):** Repository und Paket wurden entgegen der Zeile
+> „Registry" unten **öffentlich** angelegt (`Veeit/Hausverwaltung-KI`,
+> `ghcr.io/veeit/hausverwaltung-ki`). Maßgeblich für den Betrieb ist
+> `deploy/unraid/README.md`, nicht diese Tabelle.
+
 | Frage | Entscheidung | Begründung |
 |---|---|---|
 | Prozess-Topologie | **Ein Image, ein Container, beide Prozesse** über einen kleinen Node-Supervisor | Nur ein Unraid-Template, ein Volume, Secrets einmal gepflegt |

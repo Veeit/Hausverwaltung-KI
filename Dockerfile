@@ -28,6 +28,15 @@ ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
+# .next/cache ist webpack-Build-Cache, den next start nie liest (nur next
+# build/dev nutzt ihn), aber der Grossteil des Verzeichnisses. Das muss HIER
+# in der build-Stage geloescht werden, nicht erst nach dem COPY unten in der
+# runtime-Stage: COPY --from=build kopiert nur, was zu diesem Zeitpunkt noch
+# existiert - ein rm -rf danach in der runtime-Stage wuerde die Bytes nur vor
+# darin laufenden Containern verstecken (Overlay-Whiteout), sie aber nicht
+# aus dem bereits geschriebenen COPY-Layer entfernen und das Image somit
+# nicht kleiner machen.
+RUN rm -rf .next/cache
 
 # ============================================================
 # 3. Nur Produktions-Dependencies (better-sqlite3 erneut gebaut)

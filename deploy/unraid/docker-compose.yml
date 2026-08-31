@@ -1,3 +1,7 @@
+# WARNUNG: Diese Datei darf niemals mit echten Werten committet werden -
+# dieses Repository ist oeffentlich. Ihr Inhalt gehoert eingefuegt in den
+# Unraid Compose Manager, nicht ins Git-Repo.
+#
 # Fuer das Unraid-Plugin "Compose Manager": neuen Stack anlegen und diesen
 # Inhalt einfuegen. Die Platzhalter in Grossbuchstaben vorher ersetzen.
 services:

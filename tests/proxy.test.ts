@@ -1,7 +1,16 @@
 import { NextRequest } from "next/server";
+// Next kompiliert config.matcher nicht als rohen JS-Regex-String, sondern als
+// path-to-regexp-Muster (vollstaendig verankert, mit optionalem
+// Trailing-Slash am Ende) - genau dieselbe Funktion nutzt Next intern beim
+// Build, um aus dem Matcher-String den tatsaechlichen Abgleich-Regex zu
+// erzeugen. tryToParsePath direkt zu nutzen bildet also nach, wie Next
+// "/((?!login$|api/health$|...).*)" wirklich anwendet - ein naives
+// `new RegExp(matcher)` waere NICHT verankert und wuerde jeden mit "/"
+// beginnenden Pfad faelschlich matchen.
+import { tryToParsePath } from "next/dist/lib/try-to-parse-path";
 import { afterEach, describe, expect, it } from "vitest";
 import { AUTH_COOKIE, sha256Hex } from "@/lib/auth";
-import { proxy } from "@/proxy";
+import { config, proxy } from "@/proxy";
 
 const ORIGINAL_DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD;
 
@@ -80,5 +89,35 @@ describe("proxy (Zugriffsschutz, fail-closed)", () => {
 
     expect(response.status).not.toBe(200);
     expect(response.headers.get("location")).toContain("/login");
+  });
+});
+
+describe("proxy config.matcher (entscheidet, welche Pfade den Proxy ueberhaupt durchlaufen)", () => {
+  const { regexStr } = tryToParsePath(config.matcher[0]);
+  if (regexStr === undefined) {
+    throw new Error("config.matcher[0] liess sich nicht als Next-Pfadmuster parsen");
+  }
+  const matcherRegex = new RegExp(regexStr);
+
+  function matches(path: string): boolean {
+    return matcherRegex.test(path);
+  }
+
+  it.each([
+    // [Pfad, laeuft durch den Proxy (true = geschuetzt), Beschreibung]
+    ["/api/health", false, "Health-Endpunkt ist ausgenommen"],
+    ["/login", false, "Login-Seite ist ausgenommen"],
+    ["/favicon.ico", false, "Favicon ist ausgenommen"],
+    ["/_next/static/chunk.js", false, "Next-Framework-Assets sind ausgenommen"],
+    ["/api/healthz", true, "aehnlicher, aber anderer Pfad bleibt geschuetzt"],
+    ["/api/health/", true, "Trailing Slash ist NICHT derselbe Pfad wie api/health"],
+    ["/api/health/secret", true, "Unterpfad von api/health bleibt geschuetzt"],
+    ["/loginXYZ", true, "Pfad, der nur mit 'login' BEGINNT, bleibt geschuetzt"],
+    ["/login/admin", true, "Unterpfad von /login bleibt geschuetzt"],
+    ["/", true, "Startseite ist geschuetzt"],
+    ["/vorgaenge", true, "Dashboard-Seite ist geschuetzt"],
+    ["/vorgaenge/1", true, "Detailseite ist geschuetzt"],
+  ])("%s -> geschuetzt=%s (%s)", (path, protected_) => {
+    expect(matches(path)).toBe(protected_);
   });
 });

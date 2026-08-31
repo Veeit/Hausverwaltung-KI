@@ -11,6 +11,11 @@
 **Spec:** `docs/superpowers/specs/2026-08-30-docker-deployment-design.md`
 **Verwandter Plan:** `docs/superpowers/plans/2026-08-30-ki-hausverwaltung-mvp.md` — dessen Task 1 wird in Task 1 dieses Plans umgeschrieben.
 
+> **Überholt (2026-08-31):** Entgegen dem Goal-Satz und mehreren Stellen unten
+> („privates Paket" etc.) sind Repository `Veeit/Hausverwaltung-KI` und das
+> GHCR-Paket **öffentlich**. Maßgeblich für den Betrieb ist
+> `deploy/unraid/README.md`, nicht dieser historische Plan.
+
 ## Global Constraints
 
 - Registry und Image: **`ghcr.io/veeit/hausverwaltung-ki`**. Das Repository `Veeit/Hausverwaltung-KI` ist **oeffentlich**; ein daraus per `GITHUB_TOKEN` veroeffentlichtes Paket ist damit standardmaessig ebenfalls oeffentlich. Die Unraid-Anleitung muss beide Faelle abdecken: bei einem oeffentlichen Paket entfaellt der Registry-Login ersatzlos, bei einem nachtraeglich auf privat gestellten Paket wird er gebraucht. `docker/metadata-action` schreibt den Namen automatisch klein.
@@ -1091,11 +1096,15 @@ PY
         context: .
       image: ki-hausverwaltung:local
       ports:
-        # Host-Port ueber HV_PORT ueberschreibbar, Standard 3000.
-        - "${HV_PORT:-3000}:3000"
+        # Host-Port ueber HV_PORT ueberschreibbar, Standard 3100 (Port 3000
+        # ist auf Veits Mac durch einen anderen Dev-Server belegt).
+        - "${HV_PORT:-3100}:3000"
       environment:
-        # Ohne echte Zugangsdaten laeuft nur das Dashboard.
+        # Ohne DASHBOARD_PASSWORD leitet der Proxy fail-closed jeden Pfad auf
+        # /login um; erreichbar bleibt nur /api/health. Der Wert unten ist ein
+        # Wegwerf-Passwort nur fuer den lokalen Test.
         RUN_WORKER: "0"
+        DASHBOARD_PASSWORD: lokal-nur-test
       volumes:
         - hv-data:/app/data
       restart: unless-stopped
