@@ -57,11 +57,12 @@ ENV NODE_ENV=production \
 COPY --from=prod-deps /app/node_modules ./node_modules
 # tsconfig.json wird zur Laufzeit gebraucht: tsx liest den Pfad-Alias @/* daraus.
 COPY package.json package-lock.json tsconfig.json next.config.ts ./
-RUN npm install --no-save --prefix /tmp/ts-install typescript@^5 \
-    && cp -r /tmp/ts-install/node_modules/typescript ./node_modules/typescript \
-    && ln -sf ../typescript/bin/tsc ./node_modules/.bin/tsc \
-    && ln -sf ../typescript/bin/tsserver ./node_modules/.bin/tsserver \
-    && rm -rf /tmp/ts-install
+# typescript wird zur Laufzeit gebraucht, obwohl es nur eine devDependency ist:
+# next start transpiliert next.config.ts beim Hochfahren und braucht dafuer
+# das Paket im node_modules. Aus der deps-Stage kopiert, damit exakt die
+# lockfile-gepinnte Version verwendet wird (keine erneute Aufloesung gegen
+# die Registry).
+COPY --from=deps /app/node_modules/typescript ./node_modules/typescript
 COPY --from=build /app/.next ./.next
 COPY src ./src
 COPY docker ./docker

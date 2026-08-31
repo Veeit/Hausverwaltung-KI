@@ -1052,9 +1052,15 @@ PY
       RUN_WORKER=1
 
   COPY --from=prod-deps /app/node_modules ./node_modules
-  COPY --from=build /app/.next ./.next
   # tsconfig.json wird zur Laufzeit gebraucht: tsx liest den Pfad-Alias @/* daraus.
   COPY package.json package-lock.json tsconfig.json next.config.ts ./
+  # typescript wird zur Laufzeit gebraucht, obwohl es nur eine devDependency ist:
+  # next start transpiliert next.config.ts beim Hochfahren und braucht dafuer
+  # das Paket im node_modules. Aus der deps-Stage kopiert, damit exakt die
+  # lockfile-gepinnte Version verwendet wird (keine erneute Aufloesung gegen
+  # die Registry).
+  COPY --from=deps /app/node_modules/typescript ./node_modules/typescript
+  COPY --from=build /app/.next ./.next
   COPY src ./src
   COPY docker ./docker
   # Sobald das Projekt statische Dateien unter public/ ablegt, hier ergaenzen:
@@ -1157,17 +1163,31 @@ PY
 
   Run:
 
+  **Wichtig:** `docker compose restart` startet denselben Container neu und
+  beweist gar nichts — die Datei überlebte auch dann, wenn sie in der
+  Schreibschicht des Containers statt im Volume läge. Der Container muss
+  deshalb zerstört und neu erzeugt werden; `down` ohne `-v` behält benannte
+  Volumes.
+
+  Auf Rechnern ohne Compose-Plugin heißt das Kommando `docker-compose`
+  statt `docker compose`.
+
   ```bash
   docker rm -f hv-test
-  HV_PORT=3100 docker compose up -d
+  export HV_PORT=3100
+  docker compose up -d
   sleep 12
   docker compose exec -T app sh -c 'echo bleibt > /app/data/persistenz.txt'
-  HV_PORT=3100 docker compose restart
+  docker inspect "$(docker compose ps -q app)" --format '{{range .Mounts}}{{.Type}} {{.Name}} -> {{.Destination}}{{end}}'
+  docker compose down
+  docker compose up -d
   sleep 12
   docker compose exec -T app cat /app/data/persistenz.txt
   ```
 
-  Expected: Die letzte Ausgabe ist `bleibt` — das Volume überlebt den Neustart.
+  Expected: `docker inspect` zeigt `volume …_hv-data -> /app/data` — die Daten
+  liegen also tatsächlich auf dem Volume und nicht in der Schreibschicht. Nach
+  dem Zerstören und Neuerzeugen ist die letzte Ausgabe `bleibt`.
 
 - [ ] **Step 10: Fehlerfall des Health-Endpunkts im Container prüfen**
 
