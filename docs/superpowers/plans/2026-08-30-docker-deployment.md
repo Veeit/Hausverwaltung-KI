@@ -13,7 +13,7 @@
 
 ## Global Constraints
 
-- Registry und Image: **`ghcr.io/veeit/ki-hausverwaltung`**, Paket-Sichtbarkeit **privat**. `docker/metadata-action` schreibt den Namen automatisch klein.
+- Registry und Image: **`ghcr.io/veeit/hausverwaltung-ki`**. Das Repository `Veeit/Hausverwaltung-KI` ist **oeffentlich**; ein daraus per `GITHUB_TOKEN` veroeffentlichtes Paket ist damit standardmaessig ebenfalls oeffentlich. Die Unraid-Anleitung muss beide Faelle abdecken: bei einem oeffentlichen Paket entfaellt der Registry-Login ersatzlos, bei einem nachtraeglich auf privat gestellten Paket wird er gebraucht. `docker/metadata-action` schreibt den Namen automatisch klein.
 - Build-Plattform: **nur `linux/amd64`**. Unraid ist x86_64; ein arm64-Build kostete nur QEMU-Zeit für das native Modul.
 - Basis-Image: **`node:22-bookworm-slim`** (nicht Alpine — `better-sqlite3` kompiliert nativ gegen glibc). Alle Build-Stages nutzen dieselbe Basis, damit das kompilierte Modul zur Laufzeit-glibc passt.
 - Laufzeit-User im Container: **uid 99 / gid 100** (`nobody:users`) — Unraids Besitzer für `/mnt/user/appdata`. Ein abweichender uid erzeugt Schreibfehler auf dem gemounteten Volume.
@@ -1223,7 +1223,7 @@ PY
 **Interfaces:**
 
 - Consumes: `Dockerfile` und `.dockerignore` (Task 4), `npm test` und `npm run build` (Tasks 1–2), `/api/health` (Task 2), `RUN_WORKER=0` (Task 3).
-- Produces: Image-Tags `latest` (nur `main`), `sha-<kurz>`, `pr-<nummer>` sowie SemVer-Tags bei Git-Tags `v*`. Task 7 verweist auf `ghcr.io/veeit/ki-hausverwaltung:latest`.
+- Produces: Image-Tags `latest` (nur `main`), `sha-<kurz>`, `pr-<nummer>` sowie SemVer-Tags bei Git-Tags `v*`. Task 7 verweist auf `ghcr.io/veeit/hausverwaltung-ki:latest`.
 
 **Warum zweimal gebaut wird:** Der erste `build-push-action`-Aufruf lädt das Image mit `load: true` in den lokalen Docker-Daemon des Runners, damit die Rauchprobe es starten kann. Der zweite Aufruf pusht — er trifft dank `type=gha`-Cache auf fertige Layer und dauert nur Sekunden. So wird nie ein Image veröffentlicht, das nicht mindestens einmal gestartet ist.
 
@@ -1392,7 +1392,7 @@ PY
 
 ### Task 6: GitHub-Repository anlegen und Pipeline scharf schalten
 
-**Ziel:** Der Code liegt in einem privaten GitHub-Repository, der Workflow läuft nachweislich grün, und `ghcr.io/veeit/ki-hausverwaltung:latest` existiert als privates Paket.
+**Ziel:** Der Code liegt im GitHub-Repository `Veeit/Hausverwaltung-KI`, der Workflow läuft nachweislich grün, und `ghcr.io/veeit/hausverwaltung-ki:latest` existiert als Paket.
 
 **Files:** keine (ausschließlich Git- und GitHub-Operationen)
 
@@ -1427,9 +1427,9 @@ PY
 
   Veit die folgenden Punkte bestätigen lassen, bevor irgendein Kommando läuft:
 
-  - Repository-Name `veeit/KI-Hausverwaltung`, Sichtbarkeit **privat**
+  - Repository `Veeit/Hausverwaltung-KI` (existiert bereits, **oeffentlich**)
   - Der bisherige Inhalt (Spec, Pläne, Projektgerüst) wird nach GitHub hochgeladen
-  - Das gebaute Image wird als **privates** Paket unter `ghcr.io/veeit/ki-hausverwaltung` veröffentlicht
+  - Das gebaute Image wird als **privates** Paket unter `ghcr.io/veeit/hausverwaltung-ki` veröffentlicht
 
   Ohne ausdrückliche Zustimmung hier abbrechen.
 
@@ -1490,8 +1490,8 @@ PY
   Run:
 
   ```bash
-  gh api "/user/packages/container/ki-hausverwaltung" --jq '.name, .visibility'
-  gh api "/user/packages/container/ki-hausverwaltung/versions" --jq '.[0].metadata.container.tags'
+  gh api "/user/packages/container/hausverwaltung-ki" --jq '.name, .visibility'
+  gh api "/user/packages/container/hausverwaltung-ki/versions" --jq '.[0].metadata.container.tags'
   ```
 
   Expected: Ausgabe `ki-hausverwaltung`, `private` und eine Tag-Liste, die `latest` enthält.
@@ -1501,7 +1501,7 @@ PY
   Run:
 
   ```bash
-  docker pull --platform linux/amd64 ghcr.io/veeit/ki-hausverwaltung:latest
+  docker pull --platform linux/amd64 ghcr.io/veeit/hausverwaltung-ki:latest
   ```
 
   Expected: Der Pull gelingt (die lokale Docker-Anmeldung übernimmt `gh auth`s Token nicht automatisch — schlägt der Pull mit `denied` fehl, vorher `gh auth token | docker login ghcr.io -u veeit --password-stdin` ausführen). Damit ist bewiesen, dass genau der Weg funktioniert, den Unraid in Task 7 geht.
@@ -1532,7 +1532,7 @@ PY
   # Inhalt einfuegen. Die Platzhalter in Grossbuchstaben vorher ersetzen.
   services:
     ki-hausverwaltung:
-      image: ghcr.io/veeit/ki-hausverwaltung:latest
+      image: ghcr.io/veeit/hausverwaltung-ki:latest
       container_name: ki-hausverwaltung
       restart: unless-stopped
       ports:
@@ -1584,12 +1584,12 @@ PY
   # KI-Hausverwaltung auf Unraid betreiben
 
   Das Image wird von GitHub Actions gebaut und liegt **privat** unter
-  `ghcr.io/veeit/ki-hausverwaltung`. Es enthält Dashboard und Mail-Worker in
+  `ghcr.io/veeit/hausverwaltung-ki`. Es enthält Dashboard und Mail-Worker in
   einem Container.
 
   | Eigenschaft | Wert |
   |---|---|
-  | Image | `ghcr.io/veeit/ki-hausverwaltung:latest` |
+  | Image | `ghcr.io/veeit/hausverwaltung-ki:latest` |
   | Architektur | `linux/amd64` |
   | Port im Container | `3000` |
   | Persistenter Pfad | `/app/data` (SQLite-Datenbank und Mail-Anhänge) |
@@ -1642,7 +1642,7 @@ PY
   | Feld | Wert |
   |---|---|
   | Name | `ki-hausverwaltung` |
-  | Repository | `ghcr.io/veeit/ki-hausverwaltung:latest` |
+  | Repository | `ghcr.io/veeit/hausverwaltung-ki:latest` |
   | Network Type | `Bridge` |
   | Port (Host → Container) | `3080` → `3000`, TCP |
   | Path (Host → Container) | `/mnt/user/appdata/ki-hausverwaltung` → `/app/data`, Read/Write |
