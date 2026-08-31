@@ -93,7 +93,9 @@ jobs:
           set -euo pipefail
           docker run -d --name smoke -p 3000:3000 -e RUN_WORKER=0 ki-hausverwaltung:smoke
           for _ in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:3000/api/health; then
+            # grep statt blossem Exit-Code: eine Weiterleitung (z.B. auf
+            # /login) liefert curl -fsS ebenfalls Exit 0, aber keinen Body.
+            if curl -fsS http://127.0.0.1:3000/api/health | grep -q '"status":"ok"'; then
               echo
               echo "Health-Endpunkt erreichbar"
               exit 0

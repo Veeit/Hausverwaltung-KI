@@ -1073,7 +1073,7 @@ PY
   EXPOSE 3000
 
   HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
-    CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+    CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/api/health',{redirect:'manual'}).then(async r=>process.exit(r.ok&&(await r.json()).status==='ok'?0:1)).catch(()=>process.exit(1))"
 
   ENTRYPOINT ["node", "docker/entrypoint.mjs"]
   ```
@@ -1327,7 +1327,9 @@ PY
             set -euo pipefail
             docker run -d --name smoke -p 3000:3000 -e RUN_WORKER=0 ki-hausverwaltung:smoke
             for _ in $(seq 1 30); do
-              if curl -fsS http://127.0.0.1:3000/api/health; then
+              # grep statt blossem Exit-Code: eine Weiterleitung (z.B. auf
+              # /login) liefert curl -fsS ebenfalls Exit 0, aber keinen Body.
+              if curl -fsS http://127.0.0.1:3000/api/health | grep -q '"status":"ok"'; then
                 echo
                 echo "Health-Endpunkt erreichbar"
                 exit 0

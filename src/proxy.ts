@@ -19,5 +19,8 @@ export const config = {
   // Framework-Assets. Vorher schloss z.B. "login" jeden mit "login"
   // BEGINNENDEN Pfad aus (z.B. "/loginXYZ", "/login-admin") von diesem
   // Proxy aus, wodurch diese Pfade nie geprüft wurden.
-  matcher: ["/((?!login$|_next(?:/|$)|favicon\\.ico$).*)"],
+  // "api/health" ist ausgenommen, weil der Docker-HEALTHCHECK und die
+  // Rauchprobe der CI ohne Anmeldung laufen. Der Endpunkt gibt nur
+  // Betriebszustand und den Datenpfad preis, keine Vorgangsdaten.
+  matcher: ["/((?!login$|api/health$|_next(?:/|$)|favicon\\.ico$).*)"],
 };

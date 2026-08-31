@@ -13,7 +13,11 @@ export type HealthStatus =
  * der SQLite-Datei: Auf Unraid gehört /mnt/user/appdata dem Benutzer 99:100,
  * und ein falscher Container-Benutzer scheitert genau hier.
  */
-export function getHealthStatus(env: NodeJS.ProcessEnv = process.env): HealthStatus {
+/** Nur die beiden gelesenen Schluessel werden gebraucht - `process.env` erfuellt
+ * diesen Typ, Testobjekte ebenso. `NodeJS.ProcessEnv` waere unnoetig eng. */
+type EnvLike = Record<string, string | undefined>;
+
+export function getHealthStatus(env: EnvLike = process.env): HealthStatus {
   const databasePath = env.DATABASE_PATH ?? DEFAULT_DATABASE_PATH;
   const dataDir = path.dirname(databasePath);
 

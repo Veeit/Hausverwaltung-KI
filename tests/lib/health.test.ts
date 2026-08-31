@@ -50,14 +50,18 @@ describe("getHealthStatus", () => {
     }
   });
 
-  it("faellt ohne DATABASE_PATH auf den Default zurueck", () => {
-    const result = getHealthStatus({});
+  it("verwendet den dokumentierten Default-Pfad", () => {
+    expect(DEFAULT_DATABASE_PATH).toBe("./data/hausverwaltung.db");
+  });
 
-    // Das Default-Verzeichnis ./data existiert im Testlauf nicht.
-    expect(result.status).toBe("error");
-    if (result.status === "error") {
-      expect(result.error).toContain(path.dirname(DEFAULT_DATABASE_PATH));
-    }
+  it("faellt ohne DATABASE_PATH auf den Default zurueck", () => {
+    // Bewusst kein Vergleich mit einem festen Ergebnis: ob ./data im
+    // Arbeitsverzeichnis existiert, haengt von der Umgebung ab. Geprueft wird
+    // deshalb, dass ein fehlendes DATABASE_PATH sich exakt so verhaelt wie ein
+    // ausdruecklich auf den Default gesetztes.
+    expect(getHealthStatus({})).toEqual(
+      getHealthStatus({ DATABASE_PATH: DEFAULT_DATABASE_PATH }),
+    );
   });
 
   it.skipIf(isRoot)(
