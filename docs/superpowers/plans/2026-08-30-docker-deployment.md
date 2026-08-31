@@ -1244,7 +1244,10 @@ PY
 
   concurrency:
     group: docker-${{ github.ref }}
-    cancel-in-progress: true
+    # Nur Pull-Request-Laeufe abbrechen. Ein laufender Push auf main oder ein
+    # Tag darf nicht mitten im Hochladen abgebrochen werden - sonst steht in der
+    # Registry ein halber Tag-Satz (z.B. sha-<commit> da, latest nicht).
+    cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
   env:
     REGISTRY: ghcr.io
@@ -1254,6 +1257,8 @@ PY
   jobs:
     test:
       runs-on: ubuntu-latest
+      permissions:
+        contents: read
       steps:
         - name: Checkout repository
           uses: actions/checkout@v4
