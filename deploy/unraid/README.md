@@ -174,6 +174,21 @@ Compose-Datei ergänzen und den Container neu starten. Ein Container, der in
 so einer Neustart-Schleife hängt, meldet also ein Konfigurationsproblem, kein
 Absturz-Bug — die Lösung steht wörtlich im Log.
 
+## 4a. Verfuegbare Image-Tags
+
+| Tag | Zeigt auf |
+|---|---|
+| `:latest` | der jeweils letzte Stand von `main` |
+| `:main` | dasselbe, ueber den Branch-Namen |
+| `:sha-<kurz>` | ein bestimmter Commit — fuer Rollbacks |
+| `:1.2.3`, `:1.2` | nur vorhanden, wenn ein Git-Tag `v1.2.3` gesetzt wurde |
+
+Ein Tag wie `:8080` oder ein Branch-Name, der nie gebaut wurde, existiert
+nicht — Docker meldet dann `manifest unknown`.
+
+**Der Container lauscht auf Port 3000.** Nicht 8080: Die Portangabe links vom
+Doppelpunkt ist frei waehlbar, die rechte muss `3000` sein.
+
 ## 5. Aktualisieren
 
 Jeder Push auf `main` baut ein neues `:latest`. Auf Unraid im Docker-Tab beim
