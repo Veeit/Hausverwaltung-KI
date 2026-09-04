@@ -1,32 +1,33 @@
+/**
+ * Die neun Ticketstatus in der Sprache des Vermieters statt in der des
+ * Systems ("infosammlung", "eskaliert"). className ist die Farbklasse aus
+ * globals.css: farbig sind nur die Zustände, die etwas bedeuten — was Sie
+ * entscheiden müssen (Zinnober) und was fertig ist (Grün). Der Rest ist grau.
+ */
 export const STATUS_STYLES: Record<string, { label: string; className: string }> = {
-  neu: { label: "Neu", className: "bg-blue-100 text-blue-800" },
-  infosammlung: { label: "Infosammlung", className: "bg-cyan-100 text-cyan-800" },
-  wartet_auf_genehmigung: {
-    label: "Wartet auf Genehmigung",
-    className: "bg-amber-100 text-amber-800",
-  },
-  genehmigt: { label: "Genehmigt", className: "bg-lime-100 text-lime-800" },
-  handwerker_angefragt: {
-    label: "Handwerker angefragt",
-    className: "bg-indigo-100 text-indigo-800",
-  },
-  terminiert: { label: "Terminiert", className: "bg-purple-100 text-purple-800" },
-  erledigt: { label: "Erledigt", className: "bg-green-100 text-green-800" },
-  eskaliert: { label: "Eskaliert", className: "bg-red-100 text-red-800" },
-  abgelehnt: { label: "Abgelehnt", className: "bg-gray-200 text-gray-700" },
+  neu: { label: "Neu", className: "s-neu" },
+  infosammlung: { label: "Assistent klärt Details", className: "s-info" },
+  wartet_auf_genehmigung: { label: "Wartet auf Ihre Freigabe", className: "s-wait" },
+  genehmigt: { label: "Freigegeben", className: "s-appr" },
+  handwerker_angefragt: { label: "Handwerker angefragt", className: "s-req" },
+  terminiert: { label: "Termin steht", className: "s-term" },
+  erledigt: { label: "Erledigt", className: "s-done" },
+  eskaliert: { label: "Rückfrage offen", className: "s-esc" },
+  abgelehnt: { label: "Abgelehnt", className: "s-rej" },
 };
 
 export function StatusBadge({ status }: { status: string }) {
-  const entry = STATUS_STYLES[status] ?? {
-    label: status,
-    className: "bg-gray-100 text-gray-700",
-  };
+  const entry = STATUS_STYLES[status] ?? { label: status, className: "s-neu" };
+  return <span className={`badge ${entry.className}`}>{entry.label}</span>;
+}
+
+/** Dringlichkeit aus dem Ticket; `null` heißt "noch nicht eingeschätzt". */
+export function UrgencyTag({ urgency }: { urgency: string | null }) {
+  if (!urgency) return null;
+  const known = ["niedrig", "mittel", "hoch", "notfall"].includes(urgency);
+  const label = urgency === "notfall" ? "Notfall" : urgency === "hoch" ? "Dringend" : urgency;
   return (
-    <span
-      className={`inline-block whitespace-nowrap rounded px-2 py-0.5 text-xs font-medium ${entry.className}`}
-    >
-      {entry.label}
-    </span>
+    <span className={`urg ${known ? `u-${urgency}` : "u-niedrig"}`}>{label}</span>
   );
 }
 

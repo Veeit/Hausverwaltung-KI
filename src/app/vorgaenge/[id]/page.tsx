@@ -19,14 +19,24 @@ import { roleLabel, formatDate } from "@/lib/format";
 import { sendManualReply, setTicketStatus } from "@/app/actions/tickets";
 import { fail, type ActionResult } from "@/lib/actionResult";
 import { ActionForm } from "@/app/components/ActionForm";
-import StatusBadge from "@/app/components/StatusBadge";
+import { Icon } from "@/app/components/Icon";
+import { StatusBadge, STATUS_STYLES, UrgencyTag } from "@/app/components/StatusBadge";
 
 export const dynamic = "force-dynamic";
 
-const DIRECTION_LABELS: Record<string, string> = {
-  inbound: "eingehend",
-  outbound: "ausgehend",
+const AVATAR_CLASS: Record<string, string> = {
+  tenant: "av-tenant",
+  contractor: "av-contractor",
+  landlord: "av-landlord",
+  ai: "av-ai",
+  unknown: "av-unknown",
 };
+
+function initials(role: string, email: string): string {
+  if (role === "ai") return "KI";
+  const local = email.split("@")[0] ?? "";
+  return (local.slice(0, 1) || "?").toUpperCase();
+}
 
 async function changeStatusAction(formData: FormData): Promise<ActionResult> {
   "use server";
@@ -69,16 +79,12 @@ export default async function VorgangDetailPage({
   // Der Verlauf umfasst BEIDE Conversations: die des Mieters (über
   // conversationId) und die des Handwerkers (dessen Nachrichten tragen zwar
   // dieses ticketId, liegen aber in einer eigenen Conversation). Ohne das
-  // or(...) fehlte der komplette Handwerker-Teil — also genau der Abschnitt,
-  // den Spec §7 ausdrücklich als "Mieter ↔ KI ↔ Handwerker" verlangt.
+  // or(...) fehlte der komplette Handwerker-Teil.
   const messageRows = db
     .select()
     .from(messages)
     .where(
-      or(
-        eq(messages.conversationId, ticket.conversationId),
-        eq(messages.ticketId, ticket.id),
-      ),
+      or(eq(messages.conversationId, ticket.conversationId), eq(messages.ticketId, ticket.id)),
     )
     .orderBy(asc(messages.createdAt), asc(messages.id))
     .all();
@@ -86,11 +92,7 @@ export default async function VorgangDetailPage({
   const messageIds = messageRows.map((m) => m.id);
   const attachmentRows =
     messageIds.length > 0
-      ? db
-          .select()
-          .from(attachments)
-          .where(inArray(attachments.messageId, messageIds))
-          .all()
+      ? db.select().from(attachments).where(inArray(attachments.messageId, messageIds)).all()
       : [];
   const attachmentsByMessage = new Map<number, AttachmentRow[]>();
   for (const a of attachmentRows) {
@@ -114,6 +116,9 @@ export default async function VorgangDetailPage({
     .orderBy(asc(escalations.id))
     .all();
 
+  const openApproval = approvalRows.find((a) => a.approval.status === "offen");
+  const openEscalation = escalationRows.find((e) => e.status === "offen");
+
   let collectedInfo: Record<string, string> = {};
   try {
     collectedInfo = JSON.parse(ticket.collectedInfo) as Record<string, string>;
@@ -123,207 +128,327 @@ export default async function VorgangDetailPage({
   const infoEntries = Object.entries(collectedInfo);
 
   return (
-    <main className="p-6 space-y-8 max-w-4xl">
-      <header>
-        <p className="text-sm text-gray-500">
-          <Link href="/vorgaenge" className="underline">
-            ← Zur Vorgangsliste
+    <>
+      <header className="top">
+        <div className="top-text">
+          <Link href="/vorgaenge" className="row" style={{ gap: 6, fontSize: "13.5px" }}>
+            <Icon name="zurueck" className="icon icon-sm" />
+            Zurück zu den Vorgängen
           </Link>
-        </p>
-        <h1 className="text-2xl font-bold mt-2">
-          <span className="font-mono">{buildTicketTag(ticket.id)}</span> {ticket.title}{" "}
-          <StatusBadge status={ticket.status} />
-        </h1>
+          <div className="bubble-h" style={{ marginTop: 4 }}>
+            <span className="tag">{buildTicketTag(ticket.id)}</span>
+            <h1>{ticket.title}</h1>
+            <StatusBadge status={ticket.status} />
+            <UrgencyTag urgency={ticket.urgency} />
+          </div>
+          <p className="meta">
+            {tenant ? tenant.name : "Mieter unbekannt"}
+            {tenant?.unitLabel ? ` · ${tenant.unitLabel}` : ""} · gemeldet{" "}
+            {formatDate(ticket.createdAt)}
+          </p>
+        </div>
+        {openApproval || openEscalation ? (
+          <Link href="/zu-erledigen" className="btn btn-primary">
+            {openApproval ? "Prüfen und freigeben" : "Rückfrage beantworten"}
+          </Link>
+        ) : null}
       </header>
 
-      <section className="border border-gray-200 rounded p-4">
-        <h2 className="text-lg font-semibold mb-3">Ticket-Daten</h2>
-        <dl className="grid grid-cols-[10rem_1fr] gap-y-1 text-sm">
-          <dt className="font-medium">Typ</dt>
-          <dd>{ticket.type}</dd>
-          <dt className="font-medium">Dringlichkeit</dt>
-          <dd>{ticket.urgency ?? "—"}</dd>
-          <dt className="font-medium">Zusammenfassung</dt>
-          <dd>{ticket.summary ?? "—"}</dd>
-          <dt className="font-medium">Mieter</dt>
-          <dd>
-            {tenant ? `${tenant.name} (${tenant.email})` : "Unbekannt"}
-            {tenant?.unitLabel ? `, Wohnung: ${tenant.unitLabel}` : ""}
-          </dd>
-          <dt className="font-medium">Objekt</dt>
-          <dd>{property?.address ?? "—"}</dd>
-          <dt className="font-medium">Handwerker</dt>
-          <dd>
-            {contractor
-              ? `${contractor.name} (${contractor.trade}, ${contractor.email})`
-              : "—"}
-          </dd>
-          <dt className="font-medium">Termin</dt>
-          <dd>{ticket.appointmentAt ?? "—"}</dd>
-          <dt className="font-medium">Angelegt</dt>
-          <dd>{formatDate(ticket.createdAt)}</dd>
-          <dt className="font-medium">Aktualisiert</dt>
-          <dd>{formatDate(ticket.updatedAt)}</dd>
-        </dl>
-
-        <h3 className="text-sm font-semibold mt-4 mb-1">Gesammelte Informationen</h3>
-        {infoEntries.length === 0 ? (
-          <p className="text-sm text-gray-500">Keine gesammelten Informationen.</p>
-        ) : (
-          <dl className="grid grid-cols-[10rem_1fr] gap-y-1 text-sm">
-            {infoEntries.map(([key, value]) => (
-              <div key={key} className="contents">
-                <dt className="font-medium">{key}</dt>
-                <dd className="whitespace-pre-wrap">{value}</dd>
+      <main className="main">
+        <div className="cols">
+          <div className="stack">
+            <section className="card">
+              <div className="card-h">
+                <h2>Was bisher geschrieben wurde</h2>
+                <span className="meta push">
+                  {messageRows.length} {messageRows.length === 1 ? "Nachricht" : "Nachrichten"}
+                </span>
               </div>
-            ))}
-          </dl>
-        )}
-      </section>
-
-      <section className="border border-gray-200 rounded p-4">
-        <h2 className="text-lg font-semibold mb-3">Manuelle Aktionen</h2>
-        <ActionForm action={changeStatusAction} className="flex items-center gap-2 mb-4">
-          <input type="hidden" name="ticketId" value={ticket.id} />
-          <label htmlFor="status" className="text-sm font-medium">
-            Status setzen:
-          </label>
-          <select
-            id="status"
-            name="status"
-            defaultValue={ticket.status}
-            className="border border-gray-300 rounded px-2 py-1 text-sm"
-          >
-            {TICKET_STATUSES.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-          <button
-            type="submit"
-            className="bg-gray-800 text-white rounded px-3 py-1 text-sm"
-          >
-            Übernehmen
-          </button>
-        </ActionForm>
-
-        <ActionForm action={manualReplyAction} className="space-y-2">
-          <input type="hidden" name="ticketId" value={ticket.id} />
-          <label htmlFor="text" className="block text-sm font-medium">
-            Selbst als Vermieter antworten (E-Mail an den Mieter):
-          </label>
-          <textarea
-            id="text"
-            name="text"
-            required
-            rows={5}
-            placeholder="Ihre Antwort an den Mieter…"
-            className="w-full border border-gray-300 rounded p-2 text-sm"
-          />
-          <button
-            type="submit"
-            className="bg-blue-600 text-white rounded px-3 py-1 text-sm"
-          >
-            Antwort senden
-          </button>
-        </ActionForm>
-      </section>
-
-      <section>
-        <h2 className="text-lg font-semibold mb-3">Nachrichtenverlauf</h2>
-        {messageRows.length === 0 ? (
-          <p className="text-sm text-gray-500">Noch keine Nachrichten.</p>
-        ) : (
-          <ol className="space-y-4">
-            {messageRows.map((m) => (
-              <li key={m.id} className="border border-gray-200 rounded p-3 text-sm">
-                <p className="font-semibold">
-                  {roleLabel(m.role)} ({DIRECTION_LABELS[m.direction] ?? m.direction})
-                  <span className="font-normal text-gray-500">
-                    {" "}
-                    — {formatDate(m.createdAt)}
-                  </span>
-                </p>
-                <p className="text-gray-500">
-                  Von {m.fromEmail} an {m.toEmail}
-                  {m.subject ? ` — Betreff: ${m.subject}` : ""}
-                </p>
-                <p className="whitespace-pre-wrap mt-2">{m.body}</p>
-                {(attachmentsByMessage.get(m.id) ?? []).length > 0 && (
-                  <p className="mt-2 text-gray-600">
-                    Anhänge:{" "}
-                    {(attachmentsByMessage.get(m.id) ?? [])
-                      .map((a) => a.filename)
-                      .join(", ")}
-                  </p>
+              <div className="card-b">
+                {messageRows.length === 0 ? (
+                  <p className="meta">Noch keine Nachrichten.</p>
+                ) : (
+                  <ul className="thread">
+                    {messageRows.map((m) => {
+                      const files = attachmentsByMessage.get(m.id) ?? [];
+                      return (
+                        <li key={m.id} className="msg">
+                          <span className={`msg-av ${AVATAR_CLASS[m.role] ?? "av-unknown"}`}>
+                            {initials(m.role, m.fromEmail)}
+                          </span>
+                          <div className={`bubble${m.role === "ai" ? " bubble-ai" : ""}`}>
+                            <div className="bubble-h">
+                              <span style={{ fontWeight: 700 }}>{roleLabel(m.role)}</span>
+                              <span className="eyebrow">
+                                {m.direction === "inbound" ? "eingehend" : "ausgehend"}
+                              </span>
+                              <span className="meta push">{formatDate(m.createdAt)}</span>
+                            </div>
+                            <p className="meta">
+                              {m.fromEmail} → {m.toEmail}
+                              {m.subject ? ` · ${m.subject}` : ""}
+                            </p>
+                            <p className="bubble-body">{m.body}</p>
+                            {files.length > 0 ? (
+                              <div className="row-wrap" style={{ gap: 8, marginTop: 3 }}>
+                                {files.map((a) => (
+                                  <span key={a.id} className="chip chip-static btn-sm">
+                                    <Icon name="anhang" className="icon icon-sm" />
+                                    {a.filename}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : null}
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
                 )}
-              </li>
-            ))}
-          </ol>
-        )}
-      </section>
 
-      <section>
-        <h2 className="text-lg font-semibold mb-3">Genehmigungsanträge</h2>
-        {approvalRows.length === 0 ? (
-          <p className="text-sm text-gray-500">Keine Genehmigungsanträge.</p>
-        ) : (
-          <ul className="space-y-3">
-            {approvalRows.map(({ approval, contractorName }) => (
-              <li key={approval.id} className="border border-gray-200 rounded p-3 text-sm">
-                <p>
-                  <span className="font-semibold">Status:</span> {approval.status}
-                  {approval.decidedAt ? ` (entschieden am ${formatDate(approval.decidedAt)})` : ""}
-                </p>
-                <p>
-                  <span className="font-semibold">Handwerker:</span> {contractorName}
-                </p>
-                <p className="whitespace-pre-wrap mt-1">{approval.summary}</p>
-                {approval.decisionNote && (
-                  <p className="mt-1">
-                    <span className="font-semibold">Begründung:</span> {approval.decisionNote}
-                  </p>
-                )}
-                {approval.status === "offen" && (
-                  <p className="mt-1">
-                    <Link href="/genehmigungen" className="text-blue-600 underline">
-                      Zur Genehmigungsseite
+                {openApproval ? (
+                  <div className="note note-warn note-c">
+                    <Icon name="erledigen" />
+                    <div className="grow">
+                      <p style={{ fontWeight: 700 }}>Hier wartet der Vorgang auf Sie.</p>
+                      <p style={{ fontSize: "13.5px" }}>
+                        Erst nach Ihrer Freigabe geht die Mail an{" "}
+                        {openApproval.contractorName}.
+                      </p>
+                    </div>
+                    <Link href="/zu-erledigen" className="btn btn-sm btn-ghost">
+                      Freigeben
                     </Link>
-                  </p>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+                  </div>
+                ) : null}
 
-      <section>
-        <h2 className="text-lg font-semibold mb-3">Eskalationen</h2>
-        {escalationRows.length === 0 ? (
-          <p className="text-sm text-gray-500">Keine Eskalationen.</p>
-        ) : (
-          <ul className="space-y-3">
-            {escalationRows.map((e) => (
-              <li key={e.id} className="border border-gray-200 rounded p-3 text-sm">
-                <p>
-                  <span className="font-semibold">Status:</span> {e.status}
-                </p>
-                <p className="mt-1">
-                  <span className="font-semibold">Frage der KI:</span>{" "}
-                  <span className="whitespace-pre-wrap">{e.question}</span>
-                </p>
-                {e.answer && (
-                  <p className="mt-1">
-                    <span className="font-semibold">Antwort des Vermieters:</span>{" "}
-                    <span className="whitespace-pre-wrap">{e.answer}</span>
-                  </p>
+                {openEscalation ? (
+                  <div className="note note-warn note-c">
+                    <Icon name="frage" />
+                    <div className="grow">
+                      <p style={{ fontWeight: 700 }}>Der Assistent hat eine Frage an Sie.</p>
+                      <p style={{ fontSize: "13.5px" }}>{openEscalation.question}</p>
+                    </div>
+                    <Link href="/zu-erledigen" className="btn btn-sm btn-ghost">
+                      Antworten
+                    </Link>
+                  </div>
+                ) : null}
+              </div>
+            </section>
+
+            <section className="card">
+              <div className="card-h">
+                <h2>Selbst antworten</h2>
+                <span className="meta push">
+                  Geht als E-Mail an {tenant ? tenant.name : "den Mieter"}
+                </span>
+              </div>
+              <div className="card-b">
+                <ActionForm action={manualReplyAction} className="stack-sm">
+                  <input type="hidden" name="ticketId" value={ticket.id} />
+                  <label className="label" htmlFor="text">
+                    Ihre Nachricht
+                  </label>
+                  <textarea
+                    id="text"
+                    className="field"
+                    name="text"
+                    required
+                    rows={4}
+                    placeholder="Nur nötig, wenn Sie etwas persönlich schreiben möchten …"
+                  />
+                  <div className="row-wrap actions-stack">
+                    <span className="meta">
+                      Der Assistent liest mit und führt den Dialog danach weiter.
+                    </span>
+                    <button type="submit" className="btn btn-ghost push">
+                      <Icon name="senden" className="icon icon-sm" />
+                      Antwort senden
+                    </button>
+                  </div>
+                </ActionForm>
+              </div>
+            </section>
+
+            {approvalRows.length > 0 ? (
+              <section className="card">
+                <div className="card-h">
+                  <h2>Freigaben zu diesem Vorgang</h2>
+                </div>
+                <ul className="rows">
+                  {approvalRows.map(({ approval, contractorName }) => (
+                    <li key={approval.id} style={{ alignItems: "flex-start" }}>
+                      <div className="grow stack-xs">
+                        <div className="row-wrap">
+                          <span style={{ fontWeight: 700 }}>{contractorName}</span>
+                          <span className="badge s-neu">{approval.status}</span>
+                          {approval.decidedAt ? (
+                            <span className="meta">
+                              entschieden {formatDate(approval.decidedAt)}
+                            </span>
+                          ) : null}
+                        </div>
+                        <p className="muted pre">{approval.summary}</p>
+                        {approval.decisionNote ? (
+                          <p className="meta">Begründung: {approval.decisionNote}</p>
+                        ) : null}
+                        {approval.status === "offen" ? (
+                          <Link href="/zu-erledigen" style={{ fontSize: "13.5px" }}>
+                            Jetzt entscheiden
+                          </Link>
+                        ) : null}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ) : null}
+
+            {escalationRows.length > 0 ? (
+              <section className="card">
+                <div className="card-h">
+                  <h2>Rückfragen zu diesem Vorgang</h2>
+                </div>
+                <ul className="rows">
+                  {escalationRows.map((e) => (
+                    <li key={e.id} style={{ alignItems: "flex-start" }}>
+                      <div className="grow stack-xs">
+                        <div className="row-wrap">
+                          <span className="meta">{formatDate(e.createdAt)}</span>
+                          {e.status === "offen" ? (
+                            <span className="badge s-esc">offen</span>
+                          ) : null}
+                        </div>
+                        <p className="muted">„{e.question}“</p>
+                        {e.answer ? (
+                          <div className="note note-ok" style={{ padding: "11px 14px" }}>
+                            <Icon name="check" className="icon icon-sm" />
+                            <p className="pre">{e.answer}</p>
+                          </div>
+                        ) : null}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ) : null}
+          </div>
+
+          <div className="stack" style={{ gap: 16 }}>
+            <section className="card">
+              <div className="card-h">
+                <h2>Worum es geht</h2>
+              </div>
+              <div className="card-b" style={{ gap: 12 }}>
+                {ticket.summary ? (
+                  <div>
+                    <p className="eyebrow">Zusammenfassung</p>
+                    <p className="pre">{ticket.summary}</p>
+                  </div>
+                ) : null}
+                {infoEntries.length === 0 ? (
+                  <p className="meta">Der Assistent hat noch keine Details gesammelt.</p>
+                ) : (
+                  infoEntries.map(([key, value]) => (
+                    <div key={key}>
+                      <p className="eyebrow">{key}</p>
+                      <p className="pre">{value}</p>
+                    </div>
+                  ))
                 )}
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-    </main>
+                {ticket.appointmentAt ? (
+                  <div>
+                    <p className="eyebrow">Termin</p>
+                    <p>{ticket.appointmentAt}</p>
+                  </div>
+                ) : null}
+              </div>
+            </section>
+
+            <section className="card">
+              <div className="card-h">
+                <h2>Beteiligte</h2>
+              </div>
+              <div className="card-b" style={{ gap: 14 }}>
+                <div className="row">
+                  <span className="msg-av av-tenant">
+                    {tenant ? tenant.name.slice(0, 1).toUpperCase() : "?"}
+                  </span>
+                  <div className="grow">
+                    <p style={{ fontWeight: 700 }}>{tenant ? tenant.name : "Unbekannt"}</p>
+                    <p className="meta">
+                      {tenant ? tenant.email : "—"}
+                      {tenant?.unitLabel ? ` · ${tenant.unitLabel}` : ""}
+                    </p>
+                  </div>
+                </div>
+                <div className="row">
+                  <span className="msg-av av-contractor">
+                    <Icon name="werkzeug" className="icon icon-sm" />
+                  </span>
+                  <div className="grow">
+                    <p style={{ fontWeight: 700 }}>
+                      {contractor ? contractor.name : "Noch kein Handwerker"}
+                    </p>
+                    <p className="meta">
+                      {contractor
+                        ? `${contractor.trade} · ${contractor.email}`
+                        : "wird erst nach Ihrer Freigabe beauftragt"}
+                    </p>
+                  </div>
+                </div>
+                <div className="row">
+                  <span className="msg-av av-unknown">
+                    <Icon name="gebaeude" className="icon icon-sm" />
+                  </span>
+                  <div className="grow">
+                    <p style={{ fontWeight: 700 }}>{property?.address ?? "Objekt unbekannt"}</p>
+                    <p className="meta">Art: {ticket.type}</p>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <details className="card">
+              <summary
+                style={{
+                  cursor: "pointer",
+                  padding: "16px 20px",
+                  fontWeight: 500,
+                  fontSize: "13.5px",
+                }}
+              >
+                Status von Hand setzen
+              </summary>
+              <div className="card-b" style={{ paddingTop: 0 }}>
+                <p className="meta">
+                  Nur nötig, wenn Sie etwas außerhalb des Systems geklärt haben.
+                </p>
+                <ActionForm action={changeStatusAction} className="stack-sm">
+                  <input type="hidden" name="ticketId" value={ticket.id} />
+                  <select
+                    id="status"
+                    name="status"
+                    className="field"
+                    defaultValue={ticket.status}
+                    aria-label="Neuer Status"
+                  >
+                    {TICKET_STATUSES.map((s) => (
+                      <option key={s} value={s}>
+                        {STATUS_STYLES[s]?.label ?? s}
+                      </option>
+                    ))}
+                  </select>
+                  <button type="submit" className="btn btn-ghost btn-block">
+                    Status übernehmen
+                  </button>
+                </ActionForm>
+              </div>
+            </details>
+          </div>
+        </div>
+      </main>
+    </>
   );
 }

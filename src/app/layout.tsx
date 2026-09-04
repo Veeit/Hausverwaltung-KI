@@ -1,42 +1,80 @@
 import type { Metadata } from "next";
-import { count, eq } from "drizzle-orm";
+import { count, desc, eq } from "drizzle-orm";
 import { getDb } from "@/db/client";
-import { approvals, escalations } from "@/db/schema";
-import { Nav } from "@/app/components/Nav";
+import { approvals, escalations, messages, properties, tenants } from "@/db/schema";
+import { isWorkerPaused } from "@/lib/rateLimit";
+import { formatDate } from "@/lib/format";
+import { AppShell } from "@/app/components/AppShell";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "KI-Hausverwaltung",
+  title: "Hausverwaltung",
   description: "KI-gestützte Hausverwaltung (Proof of Concept)",
 };
 
-function openCounts(): { openApprovals: number; openEscalations: number } {
+interface ShellData {
+  openTasks: number;
+  objectName: string;
+  objectSub: string;
+  lastPollLabel: string;
+}
+
+const FALLBACK: ShellData = {
+  openTasks: 0,
+  objectName: "Hausverwaltung",
+  objectSub: "",
+  lastPollLabel: "Zustand nicht abrufbar",
+};
+
+/**
+ * Kopfdaten für den Rahmen. Der Name in der Seitenleiste ist die Adresse des
+ * Objekts, sobald es genau eines gibt — ein privater Vermieter erkennt sein
+ * Haus daran schneller als am Produktnamen.
+ */
+function shellData(): ShellData {
   try {
     const db = getDb();
-    const a = db
-      .select({ n: count() })
-      .from(approvals)
-      .where(eq(approvals.status, "offen"))
+    const openApprovals =
+      db.select({ n: count() }).from(approvals).where(eq(approvals.status, "offen")).get()?.n ?? 0;
+    const openEscalations =
+      db.select({ n: count() }).from(escalations).where(eq(escalations.status, "offen")).get()?.n ?? 0;
+
+    const allProperties = db.select().from(properties).all();
+    const tenantCount = db.select({ n: count() }).from(tenants).get()?.n ?? 0;
+
+    const objectName =
+      allProperties.length === 1 ? allProperties[0].address : "Hausverwaltung";
+    const objectSub =
+      allProperties.length === 1
+        ? `${tenantCount} Mieter`
+        : `${allProperties.length} Objekte · ${tenantCount} Mieter`;
+
+    const lastMessage = db
+      .select({ createdAt: messages.createdAt })
+      .from(messages)
+      .orderBy(desc(messages.id))
+      .limit(1)
       .get();
-    const e = db
-      .select({ n: count() })
-      .from(escalations)
-      .where(eq(escalations.status, "offen"))
-      .get();
-    return { openApprovals: a?.n ?? 0, openEscalations: e?.n ?? 0 };
+
+    const lastPollLabel = isWorkerPaused()
+      ? "Pausiert — es werden keine Mails verarbeitet."
+      : lastMessage
+        ? `Letzte Nachricht: ${formatDate(lastMessage.createdAt)}`
+        : "Noch keine Nachricht eingegangen.";
+
+    return { openTasks: openApprovals + openEscalations, objectName, objectSub, lastPollLabel };
   } catch {
-    // Beim statischen Prerender (z.B. /_not-found im Build) kann Env/DB fehlen.
-    return { openApprovals: 0, openEscalations: 0 };
+    // Beim statischen Prerender (z.B. /_not-found im Build) fehlen Env und DB.
+    return FALLBACK;
   }
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
-  const { openApprovals, openEscalations } = openCounts();
+  const data = shellData();
   return (
     <html lang="de">
-      <body className="min-h-screen bg-gray-50 text-gray-900">
-        <Nav openApprovals={openApprovals} openEscalations={openEscalations} />
-        <div className="mx-auto max-w-5xl p-4">{children}</div>
+      <body>
+        <AppShell {...data}>{children}</AppShell>
       </body>
     </html>
   );

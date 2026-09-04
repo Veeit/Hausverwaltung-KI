@@ -74,7 +74,7 @@ export function ActionForm({
     <form action={formAction} className={className} id={id}>
       {children}
       {state.error ? (
-        <p className="mt-2 rounded bg-red-100 p-2 text-sm text-red-800" role="alert">
+        <p className="err" role="alert">
           {state.error}
         </p>
       ) : null}
