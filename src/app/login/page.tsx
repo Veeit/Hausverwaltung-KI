@@ -1,93 +1,96 @@
 import Link from "next/link";
 import { login } from "@/app/actions/auth";
+import { Icon } from "@/app/components/Icon";
+import { Steps } from "@/app/components/Steps";
 
 export const dynamic = "force-dynamic";
 
-/**
- * Anmeldeseite. Sie ist nicht mehr der Einstieg — das ist die Landingpage auf
- * / — sondern nur noch die Tür für Leute, die bereits einen Zugang haben.
- * Gestaltet in derselben Sprache wie die Landingpage, damit der Übergang
- * nicht wie ein anderes Produkt wirkt.
- */
 export default async function LoginPage({
   searchParams,
 }: {
   searchParams: Promise<{ fehler?: string }>;
 }) {
   const params = await searchParams;
+
   return (
-    <main className="flex min-h-screen flex-col bg-ground font-display text-ink">
-      <header className="border-b border-rule bg-panel">
-        <div className="mx-auto flex max-w-[1240px] items-center justify-between gap-3 px-5 py-4 md:px-11">
-          <Link
-            href="/"
-            className="font-mono text-[12px] font-semibold tracking-[0.24em] text-ink uppercase hover:text-accent"
-          >
-            Hausmeister KI
-          </Link>
-          <Link
-            href="/"
-            className="font-mono text-[11px] tracking-[0.14em] text-muted uppercase hover:text-ink"
-          >
-            ← Zur Startseite
-          </Link>
-        </div>
-      </header>
+    <div className="login">
+      <div className="login-form">
+        <div>
+          <div className="brand" style={{ padding: 0 }}>
+            <span className="brand-mark" style={{ width: 44, height: 44 }}>
+              <Icon name="haus" className="icon icon-lg" />
+            </span>
+            <div>
+              <div className="brand-name" style={{ color: "var(--ink)", fontSize: 17 }}>
+                Hausverwaltung
+              </div>
+              <div className="meta">Vermieter-Zugang</div>
+            </div>
+          </div>
 
-      <div className="mx-auto flex w-full max-w-[420px] flex-1 flex-col justify-center px-5 py-16">
-        <div className="mb-6 flex flex-col gap-3">
-          <span className="font-mono text-[11px] tracking-[0.2em] text-dim uppercase">
-            Zugang
-          </span>
-          <h1 className="font-display text-[34px] leading-[0.96] font-black tracking-[-0.03em] uppercase">
-            Anmelden.
-          </h1>
-        </div>
+          <div className="stack-xs">
+            <h1>Willkommen zurück</h1>
+            <p className="muted">
+              Melden Sie sich an, um zu sehen, was Ihre Mieter gemeldet haben.
+            </p>
+          </div>
 
-        {params.fehler === "konfiguration" ? (
-          <p className="mb-5 border border-rule-strong bg-panel p-3.5 text-[13.5px] leading-normal font-medium text-ink-soft">
-            Die Anmeldung ist nicht korrekt konfiguriert: Es ist kein
-            DASHBOARD_PASSWORD hinterlegt. Bitte wenden Sie sich an den
-            Betreiber und setzen Sie die Umgebungsvariable DASHBOARD_PASSWORD.
+          {params.fehler === "konfiguration" ? (
+            <div className="note note-warn">
+              <Icon name="warnung" />
+              <p>
+                Die Anmeldung ist nicht eingerichtet: Es ist kein DASHBOARD_PASSWORD
+                hinterlegt. Bitte wenden Sie sich an den Betreiber.
+              </p>
+            </div>
+          ) : params.fehler ? (
+            <div className="note note-warn">
+              <Icon name="warnung" />
+              <p>Falsches Passwort. Bitte versuchen Sie es erneut.</p>
+            </div>
+          ) : null}
+
+          <form action={login} className="stack-sm">
+            <div>
+              <label className="label" htmlFor="password">
+                Passwort
+              </label>
+              <input
+                id="password"
+                className="field"
+                name="password"
+                type="password"
+                required
+                autoFocus
+              />
+            </div>
+            <button type="submit" className="btn btn-primary btn-block">
+              Anmelden
+            </button>
+          </form>
+
+          <p className="meta">
+            Ein Passwort für die Verwaltung. Es steht in der Konfiguration Ihres
+            Servers.
           </p>
-        ) : params.fehler ? (
-          <p className="mb-5 border border-rule-strong bg-panel p-3.5 text-[13.5px] font-medium text-ink-soft">
-            Falsches Passwort. Bitte versuchen Sie es erneut.
+
+          <p className="meta" style={{ borderTop: "1px solid var(--line)", paddingTop: 14 }}>
+            Noch keinen Zugang? Wir vergeben derzeit keine — tragen Sie sich in
+            die <Link href="/#warteliste">Warteliste</Link> ein. Eine Demo des
+            laufenden Systems zeigen wir auf Anfrage.
           </p>
-        ) : null}
-
-        <form action={login} className="flex flex-col gap-3">
-          <label
-            className="font-mono text-[10px] tracking-[0.18em] text-dim uppercase"
-            htmlFor="password"
-          >
-            Passwort
-          </label>
-          <input
-            id="password"
-            name="password"
-            type="password"
-            required
-            autoFocus
-            className="border border-rule bg-panel p-3 text-ink outline-none focus:border-accent"
-          />
-          <button
-            type="submit"
-            className="bg-accent p-3.5 font-display text-[15px] font-bold text-on-accent hover:bg-accent-hi"
-          >
-            Anmelden
-          </button>
-        </form>
-
-        <p className="mt-8 border-t border-rule pt-5 text-[13px] leading-normal font-medium text-muted">
-          Noch keinen Zugang? Wir vergeben derzeit keine — tragen Sie sich in
-          die{" "}
-          <Link href="/#warteliste" className="text-accent hover:text-accent-hi">
-            Warteliste
-          </Link>{" "}
-          ein. Eine Demo des laufenden Systems zeigen wir auf Anfrage.
-        </p>
+        </div>
       </div>
-    </main>
+
+      <aside className="login-aside">
+        <div className="login-steps">
+          <p className="eyebrow">So läuft eine Anfrage</p>
+          <Steps />
+          <p className="meta" style={{ borderTop: "1px solid #2c2c2c", paddingTop: 16 }}>
+            Die meiste Zeit passiert hier nichts — und genau so ist es gedacht.
+          </p>
+        </div>
+      </aside>
+    </div>
   );
 }

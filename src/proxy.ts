@@ -18,9 +18,13 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
 
 export const config = {
   // Geschützt ist ausschliesslich das Dashboard unter /app. Alles andere —
-  // Landingpage, Anmeldeseite, Framework-Assets — ist öffentlich, deshalb
+  // Produktseite, Anmeldeseite, Framework-Assets — ist öffentlich, deshalb
   // reicht hier ein positiver Pfadabgleich statt der früheren
   // Ausschlussliste. Server Actions der Dashboard-Seiten laufen als POST auf
   // denselben /app-Pfaden und sind damit ebenfalls erfasst.
+  //
+  // Damit entfällt auch die frühere Einzelausnahme für "api/health": Der
+  // Endpunkt liegt ausserhalb von /app und ist ohne Anmeldung erreichbar,
+  // wie Docker-HEALTHCHECK und die Rauchprobe der CI es brauchen.
   matcher: ["/app", "/app/:path*"],
 };

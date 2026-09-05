@@ -15,13 +15,13 @@ export function LandingHeader({ angemeldet }: { angemeldet: boolean }) {
           Hausmeister KI
         </span>
         <nav className="flex items-center gap-4 font-mono text-[11px] tracking-[0.14em] text-muted uppercase sm:gap-6">
-          <a href="#ablauf" className="hidden min-h-11 items-center hover:text-ink sm:inline-flex">
+          <a href="#ablauf" className="hidden min-h-11 items-center text-muted hover:text-ink sm:inline-flex">
             Ablauf
           </a>
-          <a href="#sicherheit" className="hidden min-h-11 items-center hover:text-ink sm:inline-flex">
+          <a href="#sicherheit" className="hidden min-h-11 items-center text-muted hover:text-ink sm:inline-flex">
             Sicherheit
           </a>
-          <a href="#preise" className="hidden min-h-11 items-center hover:text-ink sm:inline-flex">
+          <a href="#preise" className="hidden min-h-11 items-center text-muted hover:text-ink sm:inline-flex">
             Preise
           </a>
           <a

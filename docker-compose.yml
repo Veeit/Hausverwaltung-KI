@@ -1,0 +1,24 @@
+# Lokales Bauen und Starten des Images auf dem Entwicklungsrechner.
+# Fuer den Betrieb auf Unraid siehe deploy/unraid/docker-compose.yml.
+services:
+  app:
+    build:
+      context: .
+    image: ki-hausverwaltung:local
+    ports:
+      # Host-Port ueber HV_PORT ueberschreibbar, Standard 3100 (Port 3000 ist
+      # auf diesem Rechner haeufig durch einen anderen Dev-Server belegt).
+      - "${HV_PORT:-3100}:3000"
+    environment:
+      # Ohne DASHBOARD_PASSWORD leitet der Proxy fail-closed jeden Pfad auf
+      # /login um (kein Passwort kann dort je passen) - erreichbar bleibt nur
+      # /api/health. Der Wert unten ist ein Wegwerf-Passwort nur fuer den
+      # lokalen Test, kein echtes Geheimnis.
+      RUN_WORKER: "0"
+      DASHBOARD_PASSWORD: lokal-nur-test
+    volumes:
+      - hv-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  hv-data:

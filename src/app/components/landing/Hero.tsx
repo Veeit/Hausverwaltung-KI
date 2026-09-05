@@ -25,7 +25,7 @@ export function Hero() {
 
         <div className="grid gap-10 lg:grid-cols-[minmax(0,1fr)_392px] lg:gap-[42px]">
           <div className="flex flex-col gap-6">
-            <h1 className="font-display text-[34px] leading-[0.96] font-black tracking-[-0.03em] uppercase sm:text-[44px] lg:text-[50px] lg:leading-[0.94] lg:tracking-[-0.032em]">
+            <h1 className="font-display text-[34px] leading-[0.96] font-black tracking-[-0.03em] text-ink uppercase sm:text-[44px] lg:text-[50px] lg:leading-[0.94] lg:tracking-[-0.032em]">
               Ihr Mieter
               <br />
               schreibt um 23:41.

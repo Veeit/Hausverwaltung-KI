@@ -9,11 +9,15 @@ export const metadata: Metadata = {
 };
 
 /**
- * Wurzel-Layout: nur noch Dokumentgerüst und Stylesheet.
+ * Wurzel-Layout: nur Dokumentgerüst und Stylesheet.
  *
- * Die Dashboard-Navigation sitzt bewusst NICHT hier, sondern in
- * src/app/app/layout.tsx — sonst würde sie auch über der öffentlichen
- * Landingpage und der Anmeldeseite erscheinen.
+ * Der Rahmen des Dashboards (Seitenleiste, Kopfdaten) sitzt bewusst NICHT
+ * hier, sondern in src/app/app/layout.tsx — sonst läge er auch über der
+ * öffentlichen Produktseite und der Anmeldeseite.
+ *
+ * Die Schriften der Produktseite werden hier geladen, weil <head> nur im
+ * Wurzel-Layout liegt; das Dashboard nutzt sie nicht und zahlt dafür nur den
+ * Stylesheet-Verweis.
  */
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -26,7 +30,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;800;900&family=Instrument+Serif:ital@0;1&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
         />
       </head>
-      <body className="min-h-screen">{children}</body>
+      <body>{children}</body>
     </html>
   );
 }

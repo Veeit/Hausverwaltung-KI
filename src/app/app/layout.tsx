@@ -1,49 +1,80 @@
-import { count, eq } from "drizzle-orm";
-import { getDb } from "@/db/client";
-import { approvals, escalations } from "@/db/schema";
 import type { Metadata } from "next";
-import { Nav } from "@/app/components/Nav";
+import { count, desc, eq } from "drizzle-orm";
+import { getDb } from "@/db/client";
+import { approvals, escalations, messages, properties, tenants } from "@/db/schema";
+import { isWorkerPaused } from "@/lib/rateLimit";
+import { formatDate } from "@/lib/format";
+import { AppShell } from "@/app/components/AppShell";
 
-// Ohne eigene Metadaten erbt das Dashboard den Werbetitel der
-// Landingpage aus dem Wurzel-Layout.
 export const metadata: Metadata = {
-  title: "KI-Hausverwaltung",
-  description: "Vermieter-Dashboard",
+  title: "Hausverwaltung",
+  description: "KI-gestützte Hausverwaltung (Proof of Concept)",
+};
+
+interface ShellData {
+  openTasks: number;
+  objectName: string;
+  objectSub: string;
+  lastPollLabel: string;
+}
+
+const FALLBACK: ShellData = {
+  openTasks: 0,
+  objectName: "Hausverwaltung",
+  objectSub: "",
+  lastPollLabel: "Zustand nicht abrufbar",
 };
 
 /**
- * Layout des Vermieter-Dashboards (alles unter /app).
- *
- * Hier — und nur hier — hängen Navigation, Zählerstände und der helle
- * Werkzeug-Hintergrund. Die öffentliche Landingpage auf / bekommt davon
- * nichts ab.
+ * Kopfdaten für den Rahmen. Der Name in der Seitenleiste ist die Adresse des
+ * Objekts, sobald es genau eines gibt — ein privater Vermieter erkennt sein
+ * Haus daran schneller als am Produktnamen.
  */
-function openCounts(): { openApprovals: number; openEscalations: number } {
+function shellData(): ShellData {
   try {
     const db = getDb();
-    const a = db
-      .select({ n: count() })
-      .from(approvals)
-      .where(eq(approvals.status, "offen"))
+    const openApprovals =
+      db.select({ n: count() }).from(approvals).where(eq(approvals.status, "offen")).get()?.n ?? 0;
+    const openEscalations =
+      db.select({ n: count() }).from(escalations).where(eq(escalations.status, "offen")).get()?.n ?? 0;
+
+    const allProperties = db.select().from(properties).all();
+    const tenantCount = db.select({ n: count() }).from(tenants).get()?.n ?? 0;
+
+    const objectName =
+      allProperties.length === 1 ? allProperties[0].address : "Hausverwaltung";
+    const objectSub =
+      allProperties.length === 1
+        ? `${tenantCount} Mieter`
+        : `${allProperties.length} Objekte · ${tenantCount} Mieter`;
+
+    const lastMessage = db
+      .select({ createdAt: messages.createdAt })
+      .from(messages)
+      .orderBy(desc(messages.id))
+      .limit(1)
       .get();
-    const e = db
-      .select({ n: count() })
-      .from(escalations)
-      .where(eq(escalations.status, "offen"))
-      .get();
-    return { openApprovals: a?.n ?? 0, openEscalations: e?.n ?? 0 };
+
+    const lastPollLabel = isWorkerPaused()
+      ? "Pausiert — es werden keine Mails verarbeitet."
+      : lastMessage
+        ? `Letzte Nachricht: ${formatDate(lastMessage.createdAt)}`
+        : "Noch keine Nachricht eingegangen.";
+
+    return { openTasks: openApprovals + openEscalations, objectName, objectSub, lastPollLabel };
   } catch {
-    // Beim statischen Prerender (z.B. /_not-found im Build) kann Env/DB fehlen.
-    return { openApprovals: 0, openEscalations: 0 };
+    // Beim statischen Prerender (z.B. /_not-found im Build) fehlen Env und DB.
+    return FALLBACK;
   }
 }
 
+/**
+ * Rahmen des Vermieter-Dashboards (alles unter /app).
+ *
+ * Lag früher im Wurzel-Layout. Seit die Produktseite auf / sitzt, gehört er
+ * hierher — sonst erschiene die Seitenleiste auch über der Werbefläche.
+ */
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const { openApprovals, openEscalations } = openCounts();
-  return (
-    <div className="min-h-screen bg-gray-50 text-gray-900">
-      <Nav openApprovals={openApprovals} openEscalations={openEscalations} />
-      <div className="mx-auto max-w-5xl p-4">{children}</div>
-    </div>
-  );
+  const data = shellData();
+  return <AppShell {...data}>{children}</AppShell>;
 }

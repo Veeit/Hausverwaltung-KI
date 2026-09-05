@@ -11,12 +11,10 @@ import { useEffect } from "react";
  * geworfener Fehler durch einen generischen, englischen Text (nur ein
  * "digest" bleibt zur Zuordnung im Server-Log) — error.message ist hier also
  * bewusst NICHT verlässlich für den Nutzer lesbar und wird deshalb nicht
- * angezeigt. Diese Seite fängt nur den Absturz selbst ab (statt des
- * Next.js-Standardbildschirms) und bietet einen Weg zurück. Für Formulare,
- * bei denen Fehler im Alltag regelmäßig auftreten (Stammdaten,
- * Dokumenten-Upload, Genehmigungen), zeigen die Formulare selbst die
- * konkrete deutsche Meldung inline an (siehe ActionForm-Komponente) — ohne
- * dass es dafür überhaupt zu diesem Absturzbildschirm kommt.
+ * angezeigt. Diese Seite fängt nur den Absturz selbst ab und bietet einen Weg
+ * zurück. Für Formulare, bei denen Fehler im Alltag regelmäßig auftreten,
+ * zeigen die Formulare selbst die konkrete deutsche Meldung inline an (siehe
+ * ActionForm) — ohne dass es überhaupt zu diesem Bildschirm kommt.
  */
 export default function GlobalError({
   error,
@@ -30,35 +28,32 @@ export default function GlobalError({
   }, [error]);
 
   return (
-    <main className="mx-auto mt-24 max-w-md rounded border border-red-200 bg-white p-6 text-center shadow-sm">
-      <h1 className="mb-2 text-xl font-semibold text-red-800">
-        Etwas ist schiefgelaufen
-      </h1>
-      <p className="mb-1 text-sm text-gray-700">
-        Bei der Verarbeitung ist ein unerwarteter Fehler aufgetreten. Es
-        wurden keine Daten verändert; Sie können es erneut versuchen oder zur
-        Übersicht zurückkehren.
-      </p>
-      {error.digest ? (
-        <p className="mb-4 text-xs text-gray-400">Fehlerkennung: {error.digest}</p>
-      ) : (
-        <p className="mb-4" />
-      )}
-      <div className="flex justify-center gap-3">
-        <button
-          type="button"
-          onClick={() => reset()}
-          className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-        >
-          Erneut versuchen
-        </button>
-        <Link
-          href="/app"
-          className="rounded border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
-        >
-          Zur Übersicht
-        </Link>
-      </div>
+    <main className="main main-narrow">
+      <section className="card">
+        <div className="empty">
+          <span className="empty-mark" style={{ background: "var(--signal-soft)", color: "var(--signal)" }}>
+            <svg className="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 3.6l9.2 15.9H2.8z" />
+              <path d="M12 9.6v4.3M11.9 16.7h.2" />
+            </svg>
+          </span>
+          <h2 style={{ fontSize: "22px" }}>Etwas ist schiefgelaufen</h2>
+          <p className="lead" style={{ maxWidth: "48ch" }}>
+            Bei der Verarbeitung ist ein unerwarteter Fehler aufgetreten. Es wurden
+            keine Daten verändert; Sie können es erneut versuchen oder zur Übersicht
+            zurückkehren.
+          </p>
+          {error.digest ? <p className="meta">Fehlerkennung: {error.digest}</p> : null}
+          <div className="row-wrap" style={{ justifyContent: "center" }}>
+            <button type="button" onClick={() => reset()} className="btn btn-primary">
+              Erneut versuchen
+            </button>
+            <Link href="/app" className="btn btn-ghost">
+              Zur Übersicht
+            </Link>
+          </div>
+        </div>
+      </section>
     </main>
   );
 }

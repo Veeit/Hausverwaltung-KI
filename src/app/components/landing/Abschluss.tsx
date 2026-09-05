@@ -11,7 +11,7 @@ export function Abschluss() {
               <span className="bg-rule px-2 py-1 font-semibold text-ink">Vorgang HV-119</span>
               <span className="text-dim">Eingang steht noch aus</span>
             </div>
-            <h2 className="font-display text-[34px] leading-[0.96] font-black tracking-[-0.03em] uppercase sm:text-[44px] lg:text-[50px] lg:leading-[0.94]">
+            <h2 className="font-display text-[34px] leading-[0.96] font-black tracking-[-0.03em] text-ink uppercase sm:text-[44px] lg:text-[50px] lg:leading-[0.94]">
               Ihr nächster Mieter
               <br />
               schreibt{" "}
@@ -53,9 +53,9 @@ export function Abschluss() {
           <div className="flex gap-11 font-mono text-[11px] tracking-[0.14em] text-dim uppercase">
             <div className="flex flex-col">
               <span className="flex min-h-11 items-center text-muted">Produkt</span>
-              <a href="#ablauf" className="flex min-h-11 items-center hover:text-ink">Ablauf</a>
-              <a href="#sicherheit" className="flex min-h-11 items-center hover:text-ink">Sicherheit</a>
-              <a href="#preise" className="flex min-h-11 items-center hover:text-ink">Preise</a>
+              <a href="#ablauf" className="flex min-h-11 items-center text-dim hover:text-ink">Ablauf</a>
+              <a href="#sicherheit" className="flex min-h-11 items-center text-dim hover:text-ink">Sicherheit</a>
+              <a href="#preise" className="flex min-h-11 items-center text-dim hover:text-ink">Preise</a>
             </div>
             <div className="flex flex-col">
               <span className="flex min-h-11 items-center text-muted">Rechtliches</span>

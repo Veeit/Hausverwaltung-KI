@@ -28,9 +28,8 @@ Mieter ──E-Mail──▶ Fastmail (Alias hausverwaltung@…)
 ```
 
 - **Next.js-App** (`npm run dev`): öffentliche Produktseite auf `/` und
-  darunter das Vermieter-Dashboard auf `/app` (Übersicht, Vorgänge,
-  Genehmigungen, Eskalationen, Stammdaten, Dokumente, Warteliste) mit Server
-  Actions. Geschützt wird ausschliesslich `/app`; die Produktseite und
+  darunter das Vermieter-Dashboard auf `/app` (Übersicht, Zu erledigen,
+  Vorgänge, Mieter & Handwerker, Dokumente, Warteliste) mit Server Actions. Geschützt wird ausschliesslich `/app`; die Produktseite und
   `/login` sind öffentlich (siehe `src/proxy.ts`).
 - **Worker** (`npm run worker`): langlaufender Prozess — pollt IMAP, speichert
   neue Mails, startet pro Mail einen Agent-Lauf, versendet Antworten per SMTP.
@@ -319,3 +318,7 @@ npm run build    # Produktions-Build des Dashboards
   versehentliches Anklicken einer Mail im Mail-Client die Verarbeitung wieder,
   genau wie vor diesem Fix. Der Worker meldet diesen Fall beim Start einmalig
   im Log.
+
+## Betrieb im Container
+
+Siehe `deploy/unraid/README.md`.

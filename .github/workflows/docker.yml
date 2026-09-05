@@ -1,0 +1,157 @@
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: docker-${{ github.ref }}
+  # Nur Pull-Request-Laeufe abbrechen. Ein laufender Push auf main oder ein
+  # Tag darf nicht mitten im Hochladen abgebrochen werden - sonst steht in der
+  # Registry ein halber Tag-Satz (z.B. sha-<commit> da, latest nicht).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  REGISTRY: ghcr.io
+  # metadata-action schreibt den Repository-Namen automatisch klein.
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build Next.js app
+        run: npm run build
+
+  build-and-push:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            # Nicht is_default_branch: der Default-Branch des Repos ist
+            # feature/mvp-implementation, wodurch latest bei Pushes auf main nie
+            # erzeugt wurde. Der Branch-Tag liefert zusaetzlich :main.
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-
+
+      - name: Build image for smoke test
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: ki-hausverwaltung:smoke
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test the image
+        run: |
+          set -euo pipefail
+          docker run -d --name smoke -p 3000:3000 -e RUN_WORKER=0 ki-hausverwaltung:smoke
+          for _ in $(seq 1 30); do
+            # grep statt blossem Exit-Code: eine Weiterleitung (z.B. auf
+            # /login) liefert curl -fsS ebenfalls Exit 0, aber keinen Body.
+            if curl -fsS http://127.0.0.1:3000/api/health | grep -q '"status":"ok"'; then
+              echo
+              echo "Health-Endpunkt erreichbar"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Health-Endpunkt antwortete nicht innerhalb von 60 Sekunden"
+          exit 1
+
+      - name: Show container logs
+        if: always()
+        run: docker logs smoke || true
+
+      - name: Remove smoke container
+        if: always()
+        run: docker rm -f smoke || true
+
+      - name: Native better-sqlite3-Bindung im Image pruefen
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint node ki-hausverwaltung:smoke \
+            -e "new (require('better-sqlite3'))(':memory:').exec('select 1'); console.log('better-sqlite3 ok')"
+
+      - name: Worker-Start im Image pruefen (tsx, Pfad-Alias, Modulaufloesung)
+        run: |
+          set -euo pipefail
+          # RUN_WORKER=1 ohne Mail-Zugangsdaten: der Worker bricht bewusst mit
+          # Exit-Code != 0 ab, sobald er seine Umgebungsvariablen validiert hat.
+          # Genau das ist der Beweis, dass tsx geladen, der @/*-Alias aus
+          # tsconfig.json aufgeloest und der Modulgraph im Image komplett ist -
+          # ein nicht-nuller Exit-Code darf diesen Schritt also NICHT scheitern
+          # lassen. Fehlt die erwartete Log-Zeile, ist das dagegen ein echter
+          # Fehler.
+          docker run -d --name worker-check -e RUN_WORKER=1 ki-hausverwaltung:smoke || true
+          sleep 8
+          docker logs worker-check > worker-check.log 2>&1 || true
+          cat worker-check.log
+          docker rm -f worker-check || true
+          if grep -q "Umgebungsvariablen" worker-check.log; then
+            echo "Worker-Start bis zur Umgebungsvariablen-Validierung bestaetigt"
+          else
+            echo "Erwartete Log-Zeile 'Umgebungsvariablen' fehlt - Worker ist nicht wie erwartet gestartet"
+            exit 1
+          fi
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

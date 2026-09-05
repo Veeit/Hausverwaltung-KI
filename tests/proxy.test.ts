@@ -1,4 +1,13 @@
 import { NextRequest } from "next/server";
+// Next kompiliert config.matcher nicht als rohen JS-Regex-String, sondern als
+// path-to-regexp-Muster (vollstaendig verankert, mit optionalem
+// Trailing-Slash am Ende) - genau dieselbe Funktion nutzt Next intern beim
+// Build, um aus dem Matcher-String den tatsaechlichen Abgleich-Regex zu
+// erzeugen. tryToParsePath direkt zu nutzen bildet also nach, wie Next
+// "/((?!login$|api/health$|...).*)" wirklich anwendet - ein naives
+// `new RegExp(matcher)` waere NICHT verankert und wuerde jeden mit "/"
+// beginnenden Pfad faelschlich matchen.
+import { tryToParsePath } from "next/dist/lib/try-to-parse-path";
 import { afterEach, describe, expect, it } from "vitest";
 import { AUTH_COOKIE, sha256Hex } from "@/lib/auth";
 import { config, proxy } from "@/proxy";
@@ -114,5 +123,44 @@ describe("proxy (Geltungsbereich)", () => {
     for (const muster of config.matcher) {
       expect(muster.startsWith("/app")).toBe(true);
     }
+  });
+});
+
+describe("proxy config.matcher (entscheidet, welche Pfade den Proxy ueberhaupt durchlaufen)", () => {
+  // Der Matcher besteht seit dem Umzug des Dashboards nach /app aus zwei
+  // positiven Mustern statt einer Ausschlussliste. Geprueft wird deshalb
+  // gegen ALLE Muster, nicht nur gegen das erste.
+  const regexes = config.matcher.map((muster) => {
+    const { regexStr } = tryToParsePath(muster);
+    if (regexStr === undefined) {
+      throw new Error(`Muster ${muster} liess sich nicht als Next-Pfadmuster parsen`);
+    }
+    return new RegExp(regexStr);
+  });
+
+  function matches(path: string): boolean {
+    return regexes.some((re) => re.test(path));
+  }
+
+  it.each([
+    // [Pfad, laeuft durch den Proxy (true = geschuetzt), Beschreibung]
+    ["/app", true, "Dashboard-Wurzel ist geschuetzt"],
+    ["/app/vorgaenge", true, "Dashboard-Seite ist geschuetzt"],
+    ["/app/vorgaenge/1", true, "Detailseite ist geschuetzt"],
+    ["/app/warteliste", true, "Warteliste ist geschuetzt"],
+    ["/", false, "Produktseite ist oeffentlich"],
+    ["/login", false, "Anmeldeseite ist oeffentlich"],
+    // Frueher brauchte der Health-Endpunkt eine eigene Ausnahme im Muster.
+    // Seit nur noch /app geschuetzt ist, faellt er von selbst heraus —
+    // Docker-HEALTHCHECK und die Rauchprobe der CI kommen ohne Anmeldung dran.
+    ["/api/health", false, "Health-Endpunkt bleibt ohne Anmeldung erreichbar"],
+    ["/favicon.ico", false, "Favicon ist oeffentlich"],
+    ["/_next/static/chunk.js", false, "Next-Framework-Assets sind oeffentlich"],
+    // Ein Pfad, der nur mit "app" BEGINNT, darf nicht mitgeschuetzt werden —
+    // sonst waere die Trennung oeffentlich/geschuetzt unscharf.
+    ["/apple", false, "Pfad, der nur mit 'app' beginnt, ist nicht das Dashboard"],
+    ["/appliances", false, "auch laengere Wortanfaenge sind nicht das Dashboard"],
+  ])("%s -> geschuetzt=%s (%s)", (path, protected_) => {
+    expect(matches(path)).toBe(protected_);
   });
 });
