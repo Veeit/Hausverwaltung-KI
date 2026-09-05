@@ -43,7 +43,7 @@ export function Rechnung() {
             </div>
             <div className="flex items-baseline justify-between gap-3">
               <span className="text-[14.5px] leading-snug font-medium">
-                Hausmeister KI, Portfolio
+                Hausverwaltung KI, Portfolio
                 <br />
                 <span className="font-mono text-[10px] tracking-[0.1em] text-on-accent-soft">
                   3 € JE EINHEIT IM MONAT

@@ -12,7 +12,7 @@ export function LandingHeader({ angemeldet }: { angemeldet: boolean }) {
     <header className="border-b border-rule bg-panel">
       <div className="mx-auto flex max-w-[1240px] flex-wrap items-center justify-between gap-3 px-5 py-4 md:px-11">
         <span className="font-mono text-[12px] font-semibold tracking-[0.24em] text-ink uppercase">
-          Hausmeister KI
+          Hausverwaltung KI
         </span>
         <nav className="flex items-center gap-4 font-mono text-[11px] tracking-[0.14em] text-muted uppercase sm:gap-6">
           <a href="#ablauf" className="hidden min-h-11 items-center text-muted hover:text-ink sm:inline-flex">

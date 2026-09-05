@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Hausmeister KI — KI-gestützte Hausverwaltung per E-Mail",
+  title: "Hausverwaltung KI — KI-gestützte Hausverwaltung per E-Mail",
   description:
     "Ihr Mieter schreibt um 23:41. Um 23:42 weiß der Handwerker Bescheid. " +
     "Eine KI führt den Dialog, Sie geben per Klick frei.",

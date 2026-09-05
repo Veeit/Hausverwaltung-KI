@@ -43,7 +43,7 @@ export function Abschluss() {
         <div className="mx-auto flex max-w-[1240px] flex-col justify-between gap-8 px-5 py-6 md:flex-row md:px-11">
           <div className="flex flex-col gap-2">
             <span className="font-mono text-[12px] font-semibold tracking-[0.24em] text-ink uppercase">
-              Hausmeister KI
+              Hausverwaltung KI
             </span>
             <span className="max-w-[420px] text-[12.5px] leading-normal font-medium text-dim">
               KI-gestützte Hausverwaltung per E-Mail. Derzeit ein
