@@ -27,8 +27,11 @@ Mieter ──E-Mail──▶ Fastmail (Alias hausverwaltung@…)
                   Next.js Dashboard ◀─────┘
 ```
 
-- **Next.js-App** (`npm run dev`): Vermieter-Dashboard (Übersicht, Vorgänge,
-  Genehmigungen, Eskalationen, Stammdaten, Dokumente) mit Server Actions.
+- **Next.js-App** (`npm run dev`): öffentliche Produktseite auf `/` und
+  darunter das Vermieter-Dashboard auf `/app` (Übersicht, Vorgänge,
+  Genehmigungen, Eskalationen, Stammdaten, Dokumente, Warteliste) mit Server
+  Actions. Geschützt wird ausschliesslich `/app`; die Produktseite und
+  `/login` sind öffentlich (siehe `src/proxy.ts`).
 - **Worker** (`npm run worker`): langlaufender Prozess — pollt IMAP, speichert
   neue Mails, startet pro Mail einen Agent-Lauf, versendet Antworten per SMTP.
 - **KI-Agent**: Claude Opus 5 mit fünf Tools (`search_documents`,
@@ -175,8 +178,33 @@ npm run dev
 npm run worker
 ```
 
-Dashboard: **http://localhost:3000** — Login mit dem `DASHBOARD_PASSWORD`
-aus der `.env`.
+**http://localhost:3000** zeigt die öffentliche Produktseite. Das Dashboard
+liegt darunter auf **http://localhost:3000/app** und ist per
+`DASHBOARD_PASSWORD` aus der `.env` geschützt; das Passwortfeld erreichen Sie
+über „Anmelden" oben rechts oder direkt unter `/login`.
+
+Wer ohne gültiges Cookie einen `/app`-Pfad aufruft, landet auf der
+Produktseite — nicht auf einem nackten Passwortfeld. Das ist Absicht: Die
+Seite ist der Einstieg für alle, die das Produkt noch nicht kennen. Sind Sie
+angemeldet, wechselt der Knopf oben rechts auf „Zum Dashboard".
+
+### Warteliste
+
+Das Produkt ist noch nicht buchbar. Die Produktseite sammelt deshalb
+Interessenten: Das Formular unter `/#warteliste` nimmt E-Mail-Adresse,
+Größenklasse und einen optionalen Demo-Wunsch entgegen und schreibt sie in
+die Tabelle `waitlist`. Im Dashboard listet **Warteliste** (`/app/warteliste`)
+die Eintragungen, jeweils mit „Löschen" für Streichungswünsche.
+
+`joinWaitlist` in `src/app/actions/waitlist.ts` ist die **einzige Server
+Action ohne `requireAuth`** — sie ist über die öffentliche Seite für jeden
+erreichbar. Deshalb dort bewusst eng gefasst: nur drei Felder (kein
+Freitext), Adresse längenbegrenzt und normalisiert, eine bereits eingetragene
+Adresse aktualisiert ihren Eintrag statt einen zweiten anzulegen, und ein
+verstecktes Köderfeld fängt einfache Bots ab. **Nicht** abgedeckt ist ein
+Angreifer, der viele verschiedene erfundene Adressen einträgt — dagegen hilft
+nur eine Ratenbegrenzung pro IP, die ohne Reverse-Proxy nicht verlässlich
+umsetzbar ist.
 
 ### Worker automatisch neu starten
 
@@ -260,6 +288,11 @@ npm run build    # Produktions-Build des Dashboards
   passt er in kein Terminfenster, eskaliert die KI an den Vermieter — kein
   Verhandlungs-Pingpong.
 - Keine Rechnungs- und Kostenverfolgung.
+- Kein Selbstregistrieren und keine Bezahlung: Die Produktseite führt auf
+  eine Warteliste, Zugänge werden von Hand vergeben. Die Preise auf der
+  Seite sind als geplante Preise gekennzeichnet und nicht buchbar.
+- Das öffentliche Wartelisten-Formular hat keine Ratenbegrenzung pro IP
+  (siehe Abschnitt „Warteliste" oben).
 - Nur E-Mail als Kanal (SMS/WhatsApp nicht angebunden; ein Kanal-Interface
   ist als Erweiterungspunkt vorhanden).
 - Mieter-Erkennung rein über die Absenderadresse; Handwerker-Zuordnung über

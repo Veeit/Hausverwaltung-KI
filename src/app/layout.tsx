@@ -1,43 +1,32 @@
 import type { Metadata } from "next";
-import { count, eq } from "drizzle-orm";
-import { getDb } from "@/db/client";
-import { approvals, escalations } from "@/db/schema";
-import { Nav } from "@/app/components/Nav";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "KI-Hausverwaltung",
-  description: "KI-gestützte Hausverwaltung (Proof of Concept)",
+  title: "Hausmeister KI — KI-gestützte Hausverwaltung per E-Mail",
+  description:
+    "Ihr Mieter schreibt um 23:41. Um 23:42 weiß der Handwerker Bescheid. " +
+    "Eine KI führt den Dialog, Sie geben per Klick frei.",
 };
 
-function openCounts(): { openApprovals: number; openEscalations: number } {
-  try {
-    const db = getDb();
-    const a = db
-      .select({ n: count() })
-      .from(approvals)
-      .where(eq(approvals.status, "offen"))
-      .get();
-    const e = db
-      .select({ n: count() })
-      .from(escalations)
-      .where(eq(escalations.status, "offen"))
-      .get();
-    return { openApprovals: a?.n ?? 0, openEscalations: e?.n ?? 0 };
-  } catch {
-    // Beim statischen Prerender (z.B. /_not-found im Build) kann Env/DB fehlen.
-    return { openApprovals: 0, openEscalations: 0 };
-  }
-}
-
+/**
+ * Wurzel-Layout: nur noch Dokumentgerüst und Stylesheet.
+ *
+ * Die Dashboard-Navigation sitzt bewusst NICHT hier, sondern in
+ * src/app/app/layout.tsx — sonst würde sie auch über der öffentlichen
+ * Landingpage und der Anmeldeseite erscheinen.
+ */
 export default function RootLayout({ children }: { children: React.ReactNode }) {
-  const { openApprovals, openEscalations } = openCounts();
   return (
     <html lang="de">
-      <body className="min-h-screen bg-gray-50 text-gray-900">
-        <Nav openApprovals={openApprovals} openEscalations={openEscalations} />
-        <div className="mx-auto max-w-5xl p-4">{children}</div>
-      </body>
+      <head>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
+        <link
+          rel="stylesheet"
+          href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;800;900&family=Instrument+Serif:ital@0;1&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+        />
+      </head>
+      <body className="min-h-screen">{children}</body>
     </html>
   );
 }

@@ -13,9 +13,9 @@ export default function ObjektePage() {
     <main className="p-6 max-w-3xl">
       <h1 className="text-2xl font-bold mb-2">Stammdaten: Objekte</h1>
       <nav className="mb-2 flex gap-4 text-sm">
-        <Link href="/stammdaten/mieter" className="underline">Mieter</Link>
-        <Link href="/stammdaten/objekte" className="underline font-semibold">Objekte</Link>
-        <Link href="/stammdaten/handwerker" className="underline">Handwerker</Link>
+        <Link href="/app/stammdaten/mieter" className="underline">Mieter</Link>
+        <Link href="/app/stammdaten/objekte" className="underline font-semibold">Objekte</Link>
+        <Link href="/app/stammdaten/handwerker" className="underline">Handwerker</Link>
       </nav>
       <p className="text-sm text-gray-600 mb-6">
         Löschen schlägt mit einer Fehlermeldung fehl, solange dem Objekt noch Mieter

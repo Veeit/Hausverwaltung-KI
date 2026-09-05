@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { afterEach, describe, expect, it } from "vitest";
 import { AUTH_COOKIE, sha256Hex } from "@/lib/auth";
-import { proxy } from "@/proxy";
+import { config, proxy } from "@/proxy";
 
 const ORIGINAL_DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD;
 
@@ -18,7 +18,14 @@ function requestWithCookie(cookieValue: string | undefined): NextRequest {
   if (cookieValue !== undefined) {
     headers.set("cookie", `${AUTH_COOKIE}=${cookieValue}`);
   }
-  return new NextRequest("http://localhost/", { headers });
+  // Geschützt ist nur noch /app — deshalb prüft der Test einen echten
+  // Dashboard-Pfad statt der (öffentlichen) Wurzel.
+  return new NextRequest("http://localhost/app/vorgaenge", { headers });
+}
+
+/** Pfad des Location-Headers einer Weiterleitung. */
+function redirectPath(response: Response): string {
+  return new URL(response.headers.get("location") ?? "").pathname;
 }
 
 describe("proxy (Zugriffsschutz, fail-closed)", () => {
@@ -39,7 +46,7 @@ describe("proxy (Zugriffsschutz, fail-closed)", () => {
       const response = await proxy(request);
 
       expect(response.status).not.toBe(200);
-      expect(response.headers.get("location")).toContain("/login");
+      expect(redirectPath(response)).toBe("/");
     },
   );
 
@@ -51,7 +58,7 @@ describe("proxy (Zugriffsschutz, fail-closed)", () => {
     const response = await proxy(request);
 
     expect(response.status).not.toBe(200);
-    expect(response.headers.get("location")).toContain("/login");
+    expect(redirectPath(response)).toBe("/");
   });
 
   it("verweigert Zugriff ganz ohne Cookie, wenn DASHBOARD_PASSWORD leer ist", async () => {
@@ -60,7 +67,7 @@ describe("proxy (Zugriffsschutz, fail-closed)", () => {
     const response = await proxy(request);
 
     expect(response.status).not.toBe(200);
-    expect(response.headers.get("location")).toContain("/login");
+    expect(redirectPath(response)).toBe("/");
   });
 
   it("lässt den Zugriff mit korrektem Cookie zu, wenn ein Passwort konfiguriert ist", async () => {
@@ -79,6 +86,33 @@ describe("proxy (Zugriffsschutz, fail-closed)", () => {
     const response = await proxy(request);
 
     expect(response.status).not.toBe(200);
-    expect(response.headers.get("location")).toContain("/login");
+    expect(redirectPath(response)).toBe("/");
+  });
+
+  it("leitet Nichtangemeldete auf die Landingpage, nicht auf das Passwortfeld", async () => {
+    process.env.DASHBOARD_PASSWORD = "korrektes-passwort";
+    const response = await proxy(requestWithCookie(undefined));
+
+    // Der Einstieg ist die Landingpage: Wer ohne Zugang auf einen
+    // Dashboard-Link stösst, soll erst erfahren, worum es geht. Das
+    // Passwortfeld auf /login erreicht er von dort aus.
+    expect(response.status).not.toBe(200);
+    expect(redirectPath(response)).toBe("/");
+    expect(redirectPath(response)).not.toBe("/login");
+  });
+});
+
+describe("proxy (Geltungsbereich)", () => {
+  it("schützt /app und alles darunter", () => {
+    expect(config.matcher).toContain("/app");
+    expect(config.matcher).toContain("/app/:path*");
+  });
+
+  it("lässt Landingpage und Anmeldeseite öffentlich", () => {
+    // Ein Muster, das auf "/" oder "/login" passt, würde die öffentliche
+    // Seite hinter das Passwort sperren — genau das soll dieser Umbau nicht.
+    for (const muster of config.matcher) {
+      expect(muster.startsWith("/app")).toBe(true);
+    }
   });
 });

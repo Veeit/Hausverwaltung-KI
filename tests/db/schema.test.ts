@@ -12,6 +12,7 @@ import {
   settings,
   tenants,
   tickets,
+  waitlist,
 } from "@/db/schema";
 import { makeTestDb } from "../helpers/db";
 
@@ -193,6 +194,41 @@ describe("DB-Fundament: Drizzle-Schema und DDL stimmen spaltengenau überein", (
     expect(db.select().from(approvals).all()).toHaveLength(1);
     expect(db.select().from(escalations).all()).toHaveLength(1);
     expect(db.select().from(documents).all()).toHaveLength(1);
+  });
+
+  it("Roundtrip über waitlist — die Tabelle der öffentlichen Produktseite", () => {
+    const db = makeTestDb();
+
+    const eintrag = db
+      .insert(waitlist)
+      .values({ email: "interessent@example.com", units: "10-49", wantsDemo: 1 })
+      .returning()
+      .get();
+
+    expect(eintrag.id).toBe(1);
+    expect(eintrag.email).toBe("interessent@example.com");
+    expect(eintrag.units).toBe("10-49");
+    expect(eintrag.wantsDemo).toBe(1);
+    expect(eintrag.createdAt).toMatch(ISO_RE);
+
+    // Ohne Angabe zur Größe bleibt die Spalte leer, der Demo-Wunsch fällt auf 0.
+    const ohneAngaben = db
+      .insert(waitlist)
+      .values({ email: "knapp@example.com" })
+      .returning()
+      .get();
+    expect(ohneAngaben.units).toBeNull();
+    expect(ohneAngaben.wantsDemo).toBe(0);
+  });
+
+  it("erzwingt UNIQUE auf waitlist.email", () => {
+    // Trägt sich jemand zweimal ein, darf keine zweite Zeile entstehen —
+    // die Action fängt das ab, die Datenbank ist das zweite Netz.
+    const db = makeTestDb();
+    db.insert(waitlist).values({ email: "doppelt@example.com" }).run();
+    expect(() =>
+      db.insert(waitlist).values({ email: "doppelt@example.com" }).run(),
+    ).toThrow(/UNIQUE/);
   });
 
   it("erzwingt Fremdschlüssel (PRAGMA foreign_keys = ON)", () => {

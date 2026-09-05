@@ -10,14 +10,17 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
   if (expected !== null && cookieValue === expected) {
     return NextResponse.next();
   }
-  return NextResponse.redirect(new URL("/login", request.url));
+  // Ziel ist die öffentliche Landingpage, nicht mehr /login: Wer ohne Zugang
+  // auf einen Dashboard-Link stößt, bekommt zuerst zu sehen, worum es geht.
+  // Das Passwortfeld erreicht er von dort über "Ich habe bereits Zugang".
+  return NextResponse.redirect(new URL("/", request.url));
 }
 
 export const config = {
-  // Exakter Pfadabgleich statt Präfix-Lookahead: "login" und "favicon.ico"
-  // schliessen nur den jeweils exakten Pfad aus, "_next/" nur echte
-  // Framework-Assets. Vorher schloss z.B. "login" jeden mit "login"
-  // BEGINNENDEN Pfad aus (z.B. "/loginXYZ", "/login-admin") von diesem
-  // Proxy aus, wodurch diese Pfade nie geprüft wurden.
-  matcher: ["/((?!login$|_next(?:/|$)|favicon\\.ico$).*)"],
+  // Geschützt ist ausschliesslich das Dashboard unter /app. Alles andere —
+  // Landingpage, Anmeldeseite, Framework-Assets — ist öffentlich, deshalb
+  // reicht hier ein positiver Pfadabgleich statt der früheren
+  // Ausschlussliste. Server Actions der Dashboard-Seiten laufen als POST auf
+  // denselben /app-Pfaden und sind damit ebenfalls erfasst.
+  matcher: ["/app", "/app/:path*"],
 };

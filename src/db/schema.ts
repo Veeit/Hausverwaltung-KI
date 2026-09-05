@@ -27,6 +27,14 @@ export const contractors = sqliteTable("contractors", {
   createdAt: text("created_at").notNull().$defaultFn(now),
 });
 
+export const waitlist = sqliteTable("waitlist", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  email: text("email").notNull().unique(),          // immer lowercase speichern
+  units: text("units"),                             // UnitBucket | null, siehe src/lib/waitlist.ts
+  wantsDemo: integer("wants_demo").notNull().default(0), // 0 | 1 — Demo des laufenden Systems gewünscht
+  createdAt: text("created_at").notNull().$defaultFn(now),
+});
+
 export const conversations = sqliteTable("conversations", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   counterpartType: text("counterpart_type").notNull(), // 'tenant' | 'contractor' | 'unknown'

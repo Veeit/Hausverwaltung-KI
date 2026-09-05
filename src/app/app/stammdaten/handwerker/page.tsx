@@ -17,9 +17,9 @@ export default function HandwerkerPage() {
     <main className="p-6">
       <h1 className="text-2xl font-bold mb-2">Stammdaten: Handwerker</h1>
       <nav className="mb-2 flex gap-4 text-sm">
-        <Link href="/stammdaten/mieter" className="underline">Mieter</Link>
-        <Link href="/stammdaten/objekte" className="underline">Objekte</Link>
-        <Link href="/stammdaten/handwerker" className="underline font-semibold">Handwerker</Link>
+        <Link href="/app/stammdaten/mieter" className="underline">Mieter</Link>
+        <Link href="/app/stammdaten/objekte" className="underline">Objekte</Link>
+        <Link href="/app/stammdaten/handwerker" className="underline font-semibold">Handwerker</Link>
       </nav>
       <p className="text-sm text-gray-600 mb-6">
         Die KI schlägt Handwerker anhand des Gewerks vor (z.B. Sanitär, Elektrik,

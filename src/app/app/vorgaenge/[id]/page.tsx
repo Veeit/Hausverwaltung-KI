@@ -126,7 +126,7 @@ export default async function VorgangDetailPage({
     <main className="p-6 space-y-8 max-w-4xl">
       <header>
         <p className="text-sm text-gray-500">
-          <Link href="/vorgaenge" className="underline">
+          <Link href="/app/vorgaenge" className="underline">
             ← Zur Vorgangsliste
           </Link>
         </p>
@@ -287,7 +287,7 @@ export default async function VorgangDetailPage({
                 )}
                 {approval.status === "offen" && (
                   <p className="mt-1">
-                    <Link href="/genehmigungen" className="text-blue-600 underline">
+                    <Link href="/app/genehmigungen" className="text-blue-600 underline">
                       Zur Genehmigungsseite
                     </Link>
                   </p>

@@ -1,1 +1,37 @@
 @import "tailwindcss";
+
+/*
+ * Farb- und Schriftsystem der Landingpage (siehe Design-Canvas).
+ *
+ * Genau EINE Akzentfarbe: --color-accent. Alles Kennzeichnende läuft über
+ * Neutralstufen. Wer hier eine zweite bunte Farbe ergänzt, hebt die
+ * Gestaltungsentscheidung auf, die der Seite ihre Ruhe gibt.
+ *
+ * Das Dashboard unter /app nutzt bewusst weiterhin die Tailwind-Standardfarben
+ * (grau/blau) — es ist ein Werkzeug, keine Werbefläche.
+ */
+@theme {
+  --color-ground: #0d0f12;
+  --color-ground-alt: #111418;
+  --color-ground-deep: #090b0d;
+  --color-panel: #171b20;
+  --color-panel-hi: #131a22;
+  --color-rule: #262c33;
+  --color-rule-strong: #323a43;
+  --color-rule-hi: #2d3d4b;
+  --color-stamp: #55616d;
+  --color-ink: #e9eef3;
+  --color-ink-soft: #c9d3dc;
+  --color-muted: #94a1ac;
+  --color-muted-2: #8b969f;
+  --color-dim: #69747f;
+  --color-accent: #7cb8e8;
+  --color-accent-hi: #a9d3f2;
+  --color-on-accent: #0d0f12;
+  --color-on-accent-soft: #26506f;
+  --color-on-accent-mid: #143a55;
+
+  --font-display: Archivo, ui-sans-serif, system-ui, sans-serif;
+  --font-quote: "Instrument Serif", ui-serif, Georgia, serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+}

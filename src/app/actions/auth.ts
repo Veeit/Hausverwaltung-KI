@@ -38,11 +38,12 @@ export async function login(formData: FormData): Promise<void> {
     maxAge: 60 * 60 * 24 * 30,
     path: "/",
   });
-  redirect("/");
+  redirect("/app");
 }
 
 export async function logout(): Promise<void> {
   const cookieStore = await cookies();
   cookieStore.delete(AUTH_COOKIE);
-  redirect("/login");
+  // Nach dem Abmelden auf die Landingpage, nicht zurück ins Passwortfeld.
+  redirect("/");
 }

@@ -20,25 +20,28 @@ export function Nav({
   return (
     <nav className="flex flex-wrap items-center gap-4 border-b border-gray-200 bg-white px-4 py-3 text-sm">
       <span className="font-semibold">KI-Hausverwaltung</span>
-      <Link href="/" className="hover:underline">
+      <Link href="/app" className="hover:underline">
         Übersicht
       </Link>
-      <Link href="/vorgaenge" className="hover:underline">
+      <Link href="/app/vorgaenge" className="hover:underline">
         Vorgänge
       </Link>
-      <Link href="/genehmigungen" className="hover:underline">
+      <Link href="/app/genehmigungen" className="hover:underline">
         Genehmigungen
         <CountBadge count={openApprovals} />
       </Link>
-      <Link href="/eskalationen" className="hover:underline">
+      <Link href="/app/eskalationen" className="hover:underline">
         Eskalationen
         <CountBadge count={openEscalations} />
       </Link>
-      <Link href="/stammdaten/mieter" className="hover:underline">
+      <Link href="/app/stammdaten/mieter" className="hover:underline">
         Stammdaten
       </Link>
-      <Link href="/dokumente" className="hover:underline">
+      <Link href="/app/dokumente" className="hover:underline">
         Dokumente
+      </Link>
+      <Link href="/app/warteliste" className="hover:underline">
+        Warteliste
       </Link>
       <form action={logout} className="ml-auto">
         <button type="submit" className="text-gray-500 hover:underline">
