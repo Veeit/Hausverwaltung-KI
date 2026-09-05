@@ -49,10 +49,11 @@ export default function VorgaengePage() {
     },
     showUrgency = true,
   ) => (
-    <li key={ticket.id}>
+    <li key={ticket.id} className="ticket-row">
       <span className="tag">{buildTicketTag(ticket.id)}</span>
-      <div className="grow">
-        <p style={{ fontWeight: 700 }}>
+      {showUrgency ? <UrgencyTag urgency={ticket.urgency} /> : null}
+      <div className="ticket-main">
+        <p className="ticket-title">
           <Link href={`/app/vorgaenge/${ticket.id}`}>{ticket.title}</Link>
         </p>
         <p className="meta">
@@ -60,12 +61,15 @@ export default function VorgaengePage() {
           {unitLabel ? ` · ${unitLabel}` : ""}
         </p>
       </div>
-      {showUrgency ? <UrgencyTag urgency={ticket.urgency} /> : null}
-      <StatusBadge status={ticket.status} />
-      <span className="meta hide-s" style={{ whiteSpace: "nowrap", width: 118, textAlign: "right" }}>
-        {formatDate(ticket.updatedAt)}
-      </span>
-      <Link href={`/app/vorgaenge/${ticket.id}`} aria-label={`Vorgang ${buildTicketTag(ticket.id)} öffnen`}>
+      <div className="ticket-side">
+        <StatusBadge status={ticket.status} />
+        <span className="ticket-date">{formatDate(ticket.updatedAt)}</span>
+      </div>
+      <Link
+        href={`/app/vorgaenge/${ticket.id}`}
+        className="ticket-go"
+        aria-label={`Vorgang ${buildTicketTag(ticket.id)} öffnen`}
+      >
         <Icon name="weiter" className="icon icon-sm" />
       </Link>
     </li>

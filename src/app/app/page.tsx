@@ -339,18 +339,18 @@ export default function OverviewPage() {
             </div>
             <ul className="rows">
               {recentlyClosed.map(({ ticket, tenantName }) => (
-                <li key={ticket.id}>
+                <li key={ticket.id} className="ticket-row">
                   <span className="tag">{buildTicketTag(ticket.id)}</span>
-                  <div className="grow">
-                    <p style={{ fontWeight: 700 }}>
+                  <div className="ticket-main">
+                    <p className="ticket-title">
                       <Link href={`/app/vorgaenge/${ticket.id}`}>{ticket.title}</Link>
                     </p>
                     <p className="meta">{tenantName}</p>
                   </div>
-                  <StatusBadge status={ticket.status} />
-                  <span className="meta hide-s" style={{ whiteSpace: "nowrap" }}>
-                    {formatDate(ticket.updatedAt)}
-                  </span>
+                  <div className="ticket-side">
+                    <StatusBadge status={ticket.status} />
+                    <span className="ticket-date">{formatDate(ticket.updatedAt)}</span>
+                  </div>
                 </li>
               ))}
             </ul>

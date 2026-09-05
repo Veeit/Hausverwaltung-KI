@@ -359,6 +359,90 @@
   .card .rows > .rowitem:first-child { border-top: 1px solid var(--line); }
   .card-h + .rows > li:first-child { border-top: 0; }
 
+  /* ---------- Aufklappbare Stammdaten-Einträge ----------
+     Ruhige Liste als Normalfall; die Felder erscheinen erst beim Aufklappen.
+     Vorher stand jede Zeile dauerhaft als Formular da — vier Mieter waren
+     damit vier Bildschirme voller Eingabefelder. */
+  .entry { border-top: 1px solid var(--line); }
+  .entry:first-child { border-top: 0; }
+  .entry-sum {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 20px;
+    min-height: 64px;
+    cursor: pointer;
+    list-style: none;
+  }
+  .entry-sum::-webkit-details-marker { display: none; }
+  .entry-sum:hover { background: #fbfbfa; }
+  .entry-sum:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
+  .entry-name { font-weight: 700; }
+  .entry-chev { color: var(--ink-3); flex: none; transition: transform 0.12s ease; }
+  .entry[open] .entry-chev { transform: rotate(90deg); }
+  .entry[open] .entry-sum { background: var(--surface-2); }
+  .entry-body {
+    padding: 4px 20px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    background: var(--surface-2);
+    border-top: 1px solid var(--line);
+  }
+  .entry-add { border-top: 1px solid var(--line); }
+  .entry-add > summary {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 16px 20px;
+    cursor: pointer;
+    list-style: none;
+    font-weight: 500;
+    min-height: 56px;
+  }
+  .entry-add > summary::-webkit-details-marker { display: none; }
+  .entry-add > summary:hover { background: #fbfbfa; }
+  .entry-add[open] > summary { background: var(--surface-2); }
+  .entry-add-body {
+    padding: 4px 20px 20px;
+    background: var(--surface-2);
+    border-top: 1px solid var(--line);
+  }
+
+  /* ---------- Vorgangszeile ----------
+     Durchgehend ein Raster, es wechselt nur die Vorlage: am Desktop eine
+     Zeile, am Telefon drei. Der Selektor nennt bewusst `.rows > li.ticket-row`
+     und nicht nur `.ticket-row` — sonst gewinnt die allgemeine Regel
+     `.rows > li` (gleiche Spezifität, aber weiter oben) mit ihrem
+     `display: flex`, und die Zeile bricht auf schmalen Fenstern wieder
+     unkontrolliert um. */
+  .rows > li.ticket-row {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+    grid-template-areas: "tag urg main side go";
+    align-items: center;
+    gap: 14px;
+  }
+  .ticket-row > .tag { grid-area: tag; justify-self: start; }
+  .ticket-row > .urg { grid-area: urg; justify-self: start; }
+  .ticket-main { grid-area: main; min-width: 0; }
+  .ticket-title { font-weight: 700; }
+  .ticket-side { grid-area: side; display: flex; align-items: center; gap: 14px; }
+  .ticket-date { color: var(--ink-3); font-size: 12.5px; white-space: nowrap; }
+  .ticket-go { grid-area: go; color: var(--ink-3); }
+
+  @media (max-width: 640px) {
+    .rows > li.ticket-row {
+      grid-template-columns: auto 1fr auto;
+      grid-template-areas:
+        "tag  urg  go"
+        "main main main"
+        "side side side";
+      gap: 9px 10px;
+    }
+    .ticket-side { justify-content: space-between; }
+  }
+
   /* ---------- Status ---------- */
   .badge {
     display: inline-flex;
@@ -684,6 +768,8 @@
     .card-h { padding: 14px 16px; }
     .card-f { padding: 14px 16px; }
     .rows > li, .rows > .rowitem { padding: 14px 16px; gap: 12px; }
+    .entry-sum, .entry-add > summary { padding: 14px 16px; }
+    .entry-body, .entry-add-body { padding: 4px 16px 16px; }
     .lead { font-size: 15px; }
     .empty { padding: 36px 22px 32px; }
     .dl { grid-template-columns: minmax(0, 1fr); gap: 3px 0; }
