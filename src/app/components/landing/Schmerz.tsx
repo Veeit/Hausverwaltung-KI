@@ -48,7 +48,7 @@ export function Schmerz() {
 
           <div className="flex flex-col gap-4 border-t border-rule pt-8 md:border-t-0 md:border-l md:pt-0 md:pl-14">
             <div className="font-mono text-[11px] font-semibold tracking-[0.2em] text-accent uppercase">
-              Mit Hausverwaltung KI
+              Mit PropPilot
             </div>
             <div className="flex flex-col gap-2.5">
               <Zeile zeit="Di, 23:41" text="Die Mail geht raus." hell />
